@@ -1,0 +1,50 @@
+name: OpenShift CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main # This tells GitHub to run the pipeline every time you push to main
+
+jobs:
+  deploy-and-test:
+    runs-name: Deploy to OpenShift and Run Smoke Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Log in to OpenShift
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
+          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
+          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
+          insecure_skip_tls_verify: true
+
+      - name: Apply Kubernetes Configurations
+        run: |
+          # Apply any new YAML configuration changes
+          oc apply -k openshift/overlays/dev
+
+      - name: Trigger Builds and Wait
+        run: |
+          # Tell OpenShift to pull the new code and build the microservices
+          oc start-build api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service
+          
+          echo "Waiting for rollouts to complete..."
+          oc rollout status deployment/api-gateway --timeout=3m
+          oc rollout status deployment/auth-service --timeout=3m
+          oc rollout status deployment/ledger-service --timeout=3m
+          oc rollout status deployment/iso8583-adapter --timeout=3m
+          oc rollout status deployment/risk-service --timeout=3m
+          oc rollout status deployment/transaction-service --timeout=3m
+
+      - name: Run End-to-End Smoke Test
+        run: |
+          echo "Injecting smoke test into the API Gateway..."
+          GATEWAY_POD=$(oc get pods -l app.kubernetes.io/name=api-gateway -o jsonpath='{.items[0].metadata.name}')
+          ROUTE_URL="https://$(oc get route api-gateway -o jsonpath='{.spec.host}')"
+          
+          oc cp scripts/smoke_test.py $GATEWAY_POD:/tmp/smoke_test.py
+          oc exec $GATEWAY_POD -- python /tmp/smoke_test.py --base "$ROUTE_URL"
