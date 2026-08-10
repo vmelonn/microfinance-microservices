@@ -1,0 +1,35 @@
+# Keeps the build context small. This matters more than usual here, because
+# `oc start-build --from-dir=.` UPLOADS the context to the cluster on every
+# build -- without these exclusions each build ships the git history and the
+# local virtualenv over the network.
+
+.git/
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local run artefacts: scratch databases and per-service logs.
+.local-run/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+*.log
+
+# Persisted HSM key material. Encrypted, but it has no business in an image.
+*.enc
+
+# Not needed at runtime. Tests are excluded deliberately: the image should
+# contain what runs in production and nothing else. CI runs the suite from
+# the repository, not from inside the image.
+tests/
+**/tests/
+docs/
+openshift/
+.idea/
+.vscode/
+.DS_Store

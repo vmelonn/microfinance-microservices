@@ -243,6 +243,11 @@ spec:
   template:
     metadata:
       labels: {app.kubernetes.io/name: host-simulator, app.kubernetes.io/part-of: microfinance}
+      annotations:
+        # Built in-cluster like the application services, so it needs the same
+        # ImageStream name resolution. Redis, Postgres and ClickHouse above do
+        # NOT, because they pull from public registries by full name.
+        alpha.image.policy.openshift.io/resolve-names: '*'
     spec:
       serviceAccountName: microfinance
       securityContext:

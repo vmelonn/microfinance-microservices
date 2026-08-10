@@ -1,0 +1,453 @@
+# In-cluster image builds.
+#
+#     oc apply -f openshift/build/build.yaml
+#     bash scripts/openshift-build.sh
+#
+# BINARY BUILDS, not Git-triggered builds. `oc start-build --from-dir=.`
+# uploads the working tree to the cluster and builds there, which means:
+#
+#   - no local container engine is needed (useful when Docker Desktop is not
+#     running, and when the cluster architecture differs from the laptop's)
+#   - uncommitted work can be deployed, which is what you want while
+#     iterating and emphatically not what you want for production
+#
+# For production, switch source.type to Git with a ref and a webhook so an
+# image is always traceable to a commit. The binary flow deliberately has no
+# such traceability -- that is the trade.
+#
+# WHY dockerfilePath POINTS INTO services/ : every Dockerfile expects the
+# REPOSITORY ROOT as its build context, because each image installs
+# libs/mfcommon as a real package. Build the whole tree, name the Dockerfile
+# within it.
+
+---
+# api-gateway -- The only service with a Route.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: api-gateway
+  labels:
+    app.kubernetes.io/name: api-gateway
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Lets other objects in this namespace reference the tag by bare name.
+  # Deployments additionally need the resolve-names annotation on the pod
+  # template -- both halves are required, and the manifests in
+  # openshift/base/ carry the other one.
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: api-gateway
+  labels:
+    app.kubernetes.io/name: api-gateway
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/api-gateway/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: api-gateway:latest
+  resources:
+    # Builds are short-lived but pip-heavy. Too little memory and the build
+    # pod is OOM-killed with a message about the compiler, not about memory.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 5
+
+---
+# auth-service -- Users and JWT issuance.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: auth-service
+  labels:
+    app.kubernetes.io/name: auth-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Lets other objects in this namespace reference the tag by bare name.
+  # Deployments additionally need the resolve-names annotation on the pod
+  # template -- both halves are required, and the manifests in
+  # openshift/base/ carry the other one.
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: auth-service
+  labels:
+    app.kubernetes.io/name: auth-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/auth-service/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: auth-service:latest
+  resources:
+    # Builds are short-lived but pip-heavy. Too little memory and the build
+    # pod is OOM-killed with a message about the compiler, not about memory.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 5
+
+---
+# transaction-service -- The saga orchestrator.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: transaction-service
+  labels:
+    app.kubernetes.io/name: transaction-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Lets other objects in this namespace reference the tag by bare name.
+  # Deployments additionally need the resolve-names annotation on the pod
+  # template -- both halves are required, and the manifests in
+  # openshift/base/ carry the other one.
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: transaction-service
+  labels:
+    app.kubernetes.io/name: transaction-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/transaction-service/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: transaction-service:latest
+  resources:
+    # Builds are short-lived but pip-heavy. Too little memory and the build
+    # pod is OOM-killed with a message about the compiler, not about memory.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 5
+
+---
+# risk-service -- Velocity and amount rules.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: risk-service
+  labels:
+    app.kubernetes.io/name: risk-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Lets other objects in this namespace reference the tag by bare name.
+  # Deployments additionally need the resolve-names annotation on the pod
+  # template -- both halves are required, and the manifests in
+  # openshift/base/ carry the other one.
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: risk-service
+  labels:
+    app.kubernetes.io/name: risk-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/risk-service/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: risk-service:latest
+  resources:
+    # Builds are short-lived but pip-heavy. Too little memory and the build
+    # pod is OOM-killed with a message about the compiler, not about memory.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 5
+
+---
+# ledger-service -- Double-entry postings.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ledger-service
+  labels:
+    app.kubernetes.io/name: ledger-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Lets other objects in this namespace reference the tag by bare name.
+  # Deployments additionally need the resolve-names annotation on the pod
+  # template -- both halves are required, and the manifests in
+  # openshift/base/ carry the other one.
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ledger-service
+  labels:
+    app.kubernetes.io/name: ledger-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/ledger-service/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ledger-service:latest
+  resources:
+    # Builds are short-lived but pip-heavy. Too little memory and the build
+    # pod is OOM-killed with a message about the compiler, not about memory.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 5
+
+---
+# iso8583-adapter -- The REST/SOAP boundary and crypto edge.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: iso8583-adapter
+  labels:
+    app.kubernetes.io/name: iso8583-adapter
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Lets other objects in this namespace reference the tag by bare name.
+  # Deployments additionally need the resolve-names annotation on the pod
+  # template -- both halves are required, and the manifests in
+  # openshift/base/ carry the other one.
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: iso8583-adapter
+  labels:
+    app.kubernetes.io/name: iso8583-adapter
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/iso8583-adapter/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: iso8583-adapter:latest
+  resources:
+    # Builds are short-lived but pip-heavy. Too little memory and the build
+    # pod is OOM-killed with a message about the compiler, not about memory.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 5
+
+---
+# ace-stub -- Stand-in for IBM ACE. Not deployed once entitled.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ace-stub
+  labels:
+    app.kubernetes.io/name: ace-stub
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Lets other objects in this namespace reference the tag by bare name.
+  # Deployments additionally need the resolve-names annotation on the pod
+  # template -- both halves are required, and the manifests in
+  # openshift/base/ carry the other one.
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ace-stub
+  labels:
+    app.kubernetes.io/name: ace-stub
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/ace-stub/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ace-stub:latest
+  resources:
+    # Builds are short-lived but pip-heavy. Too little memory and the build
+    # pod is OOM-killed with a message about the compiler, not about memory.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 5
+
+---
+# host-simulator -- Fake switch. dev/test namespaces only.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: host-simulator
+  labels:
+    app.kubernetes.io/name: host-simulator
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Lets other objects in this namespace reference the tag by bare name.
+  # Deployments additionally need the resolve-names annotation on the pod
+  # template -- both halves are required, and the manifests in
+  # openshift/base/ carry the other one.
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: host-simulator
+  labels:
+    app.kubernetes.io/name: host-simulator
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/host-simulator/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: host-simulator:latest
+  resources:
+    # Builds are short-lived but pip-heavy. Too little memory and the build
+    # pod is OOM-killed with a message about the compiler, not about memory.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 5
+
+---
+# analytics-sync -- CronJob image: ledger to ClickHouse.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: analytics-sync
+  labels:
+    app.kubernetes.io/name: analytics-sync
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Lets other objects in this namespace reference the tag by bare name.
+  # Deployments additionally need the resolve-names annotation on the pod
+  # template -- both halves are required, and the manifests in
+  # openshift/base/ carry the other one.
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: analytics-sync
+  labels:
+    app.kubernetes.io/name: analytics-sync
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/analytics-sync/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: analytics-sync:latest
+  resources:
+    # Builds are short-lived but pip-heavy. Too little memory and the build
+    # pod is OOM-killed with a message about the compiler, not about memory.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 5

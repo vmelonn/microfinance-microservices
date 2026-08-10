@@ -13,12 +13,20 @@ Drives the full path from outside, exactly as a mobile client would:
 Uses only the standard library, so it runs with no install.
 """
 
+import argparse
 import json
 import sys
 import urllib.error
 import urllib.request
 import uuid
 
+# Defaults target docker-compose, which publishes the two gateway replicas on
+# separate host ports. Against OpenShift there is ONE Route in front of both
+# replicas, so --base is passed and the two "replicas" below become the same
+# address -- which weakens the cross-replica checks rather than breaking
+# them: the Route load-balances, so repeated calls still land on different
+# pods, just not deterministically. Compose remains the place that proves it
+# conclusively.
 GATEWAY_1 = "http://localhost:8080"
 GATEWAY_2 = "http://localhost:8081"   # the second replica
 
@@ -174,4 +182,20 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--base",
+        help=(
+            "Gateway base URL. Use this against an OpenShift Route, e.g. "
+            "--base https://$(oc get route api-gateway -o jsonpath='{.spec.host}'). "
+            "Omit it for docker-compose, which exposes both replicas separately."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.base:
+        base = args.base.rstrip("/")
+        GATEWAY_1 = GATEWAY_2 = base
+        print(f"targeting {base} (single endpoint -- the Route load-balances across replicas)")
+
     sys.exit(main())

@@ -47,6 +47,9 @@ spec:
       activeDeadlineSeconds: 3000
 
       template:
+        metadata:
+          annotations:
+            alpha.image.policy.openshift.io/resolve-names: '*'
         spec:
           restartPolicy: Never
           serviceAccountName: microfinance
@@ -108,6 +111,9 @@ spec:
     spec:
       backoffLimit: 0
       template:
+        metadata:
+          annotations:
+            alpha.image.policy.openshift.io/resolve-names: '*'
         spec:
           restartPolicy: Never
           serviceAccountName: microfinance

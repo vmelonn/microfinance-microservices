@@ -1,4 +1,4 @@
-# microfinance-microservices
+﻿# microfinance-microservices
 #
 #   make install    set up the local venv
 #   make test       run every test suite
@@ -24,7 +24,8 @@ TESTED := ace-stub ledger-service
 
 .DEFAULT_GOAL := help
 .PHONY: help install test test-shared test-services lint up down logs smoke \
-        run verify build deploy-dev deploy-prod clean wsdl
+        run verify build deploy-dev deploy-prod clean wsdl \
+        oc-init oc-build oc-status oc-smoke
 
 help:
 	@echo "microfinance-microservices"
@@ -39,7 +40,13 @@ help:
 	@echo "  down          stop and remove containers"
 	@echo "  smoke         end-to-end purchase against a running compose stack"
 	@echo "  build         build all service images"
+	@echo ""
+	@echo "  OpenShift (no local container engine needed):"
+	@echo "  oc-init       create ImageStreams + BuildConfigs"
+	@echo "  oc-build      build all 9 images IN the cluster"
 	@echo "  deploy-dev    oc apply -k openshift/overlays/dev"
+	@echo "  oc-status     pods, routes, imagestreams, recent builds"
+	@echo "  oc-smoke      drive a purchase against the deployed Route"
 	@echo "  wsdl          print the service contract"
 
 install:
@@ -103,6 +110,28 @@ build:
 		echo "=== building $$svc ==="; \
 		docker build -f "services/$$svc/Dockerfile" -t "$$svc:latest" . || exit 1; \
 	done
+
+# --- OpenShift -------------------------------------------------------------
+# The full first-time sequence is: oc-init, oc-build, deploy-dev.
+# None of it needs a local container engine -- builds happen in the cluster.
+
+oc-init:
+	@oc whoami >/dev/null 2>&1 || { echo "not logged in -- run the 'oc login' command from the console"; exit 1; }
+	oc apply -f openshift/build/build.yaml
+	@echo "ImageStreams and BuildConfigs created. Next: make oc-build"
+
+oc-build:
+	bash scripts/openshift-build.sh
+
+oc-status:
+	@echo "--- pods ---";        oc get pods
+	@echo "--- routes ---";      oc get route
+	@echo "--- imagestreams ---"; oc get is
+	@echo "--- recent builds ---"; oc get builds --sort-by=.metadata.creationTimestamp | tail -10
+
+# Drives a real purchase against the deployed Route.
+oc-smoke:
+	@$(PY) scripts/smoke_test.py --base "https://$$(oc get route api-gateway -o jsonpath='{.spec.host}')"
 
 deploy-dev:
 	oc apply -k openshift/overlays/dev

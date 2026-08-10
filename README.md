@@ -189,24 +189,75 @@ in risk-service, accounting rules in ledger-service. A shared library that
 accumulates business logic is how a microservice split quietly becomes a
 distributed monolith.
 
-## Deploying
+## Deploying to OpenShift
+
+Images are built **inside the cluster** from an upload of the working tree,
+so no local container engine is required.
 
 ```bash
-make build                              # all nine images
-oc apply -k openshift/overlays/dev
+# 0. log in — copy the command from the console (your name → Copy login command)
+oc login --token=sha256~… --server=https://api.your-cluster:6443
+oc new-project microfinance-dev
+
+# 1. ImageStreams + BuildConfigs
+make oc-init
+
+# 2. build all nine images in the cluster (a few minutes the first time)
+make oc-build
+
+# 3. real secrets — the repo ships placeholders on purpose
+oc create secret generic microfinance-secrets \
+  --from-literal=JWT_SECRET="$(openssl rand -hex 32)" \
+  --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 16)" \
+  --from-literal=HSM_MASTER_KEY_HEX="$(openssl rand -hex 32)" \
+  --from-literal=CLICKHOUSE_PASSWORD="" \
+  --dry-run=client -o yaml | oc apply -f -
+
+# 4. deploy
+make deploy-dev
+make oc-status
 ```
 
-Before prod, read the header of
-[`openshift/overlays/prod/kustomization.yaml`](openshift/overlays/prod/kustomization.yaml).
-Three things must be true: real secrets in place (the base ships a
-*placeholder* Secret so a fresh cluster applies cleanly), `SWITCH_HOST`
-repointed at the real acquirer, and image tags pinned.
+Then drive a real purchase against the Route:
 
-Every image handles OpenShift's arbitrary-UID model — `chgrp -R 0` +
-`chmod -R g=u`, packages installed system-wide rather than into a named
-user's home. Getting that wrong surfaces as `executable file not found in
-$PATH`, which is not a permission error and sends you looking in the wrong
-place entirely.
+```bash
+make oc-smoke
+```
+
+### Two things that will bite otherwise
+
+**Image names must resolve to ImageStreams.** `image: api-gateway:latest` is
+not a public image — without help, OpenShift looks it up in Docker Hub and
+every pod lands in `ImagePullBackOff`. Two settings fix it together, and both
+are already in the manifests: `lookupPolicy.local: true` on each ImageStream,
+and `alpha.image.policy.openshift.io/resolve-names: '*'` on each pod template.
+Miss either and the symptom is identical.
+
+**Arbitrary UIDs.** OpenShift runs containers as a random UID, not the one in
+the image. Every Dockerfile installs packages system-wide rather than into a
+named user's home and runs `chgrp -R 0 /app && chmod -R g=u /app`. Getting
+this wrong surfaces as `executable file not found in $PATH` — not a
+permission error — which sends you looking in entirely the wrong place.
+
+### Rebuilding after a change
+
+```bash
+bash scripts/openshift-build.sh api-gateway   # one service
+oc rollout restart deployment/api-gateway
+```
+
+### Before production
+
+Read the header of
+[`openshift/overlays/prod/kustomization.yaml`](openshift/overlays/prod/kustomization.yaml).
+Three things must be true: real secrets in place, `SWITCH_HOST` repointed at
+the real acquirer (the prod overlay **deletes** host-simulator), and image
+tags pinned rather than `latest`.
+
+Also switch the BuildConfigs from binary to Git source. Binary builds deploy
+whatever is in your working tree, including uncommitted changes — useful
+while iterating, and exactly wrong for something you need to trace back to a
+commit.
 
 ## Known gaps
 

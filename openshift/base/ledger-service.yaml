@@ -21,6 +21,12 @@ spec:
       maxSurge: 1
   template:
     metadata:
+      annotations:
+        # Resolve bare image names (api-gateway:latest) against this
+        # namespace's ImageStreams instead of Docker Hub. Without this,
+        # every pod goes ImagePullBackOff looking for an image that only
+        # exists in the cluster's internal registry.
+        alpha.image.policy.openshift.io/resolve-names: '*'
       labels:
         app.kubernetes.io/name: ledger-service
         app.kubernetes.io/part-of: microfinance
