@@ -25,3 +25,6 @@ hsm-base-key*
 
 # Compiled ACE artifact -- built from ace/, not committed.
 *.bar
+
+# Working directory for make verify -- scratch databases and service logs.
+.local-run/

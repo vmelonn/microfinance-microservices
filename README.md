@@ -37,14 +37,49 @@ REST/JSON; everything south is binary ISO 8583.
 
 ```bash
 make install          # local venv
-make test             # every suite
-make up               # the whole platform: 9 services, 3 datastores
-make smoke            # end-to-end purchase from outside
+make test             # every suite — 67 tests
+make verify           # start all 8 services, prove the full path, tear down
 ```
 
-`make smoke` drives a real purchase through the entire path and asserts on
-what comes back — including that a retry landing on a *different* gateway
-replica returns the cached result instead of charging twice.
+`make verify` needs **no container engine**. It launches every service as an
+ordinary process and drives a real purchase from outside — REST into the
+gateway, SOAP into the ISO 8583 gateway, real BCD-packed binary over a real
+socket to the switch, and back:
+
+```
+starting host-simulator         :9999   ready
+starting ace-stub               :8090   ready
+starting iso8583-adapter        :8085   ready
+starting ledger-service         :8084   ready
+starting auth-service           :8081   ready
+starting risk-service           :8083   ready
+starting transaction-service    :8082   ready
+starting api-gateway            :18080  ready
+
+  PASS  purchase approved
+  PASS  posted to the ledger          rrn=178638403660  stan=000017  auth=A18008
+  PASS  balance is -2550 cents
+  PASS  replay returned the cached result
+  PASS  balance unchanged after the replay
+  PASS  mismatched body rejected
+  PASS  cannot spend from someone else's card
+        approved → approved → approved → review → review → decline → decline
+  PASS  velocity escalated to review or decline
+  PASS  total debits == total credits
+```
+
+For the full thing — Postgres, Redis, ClickHouse, and **two** gateway
+replicas:
+
+```bash
+make up               # 9 services, 3 datastores
+make smoke
+```
+
+Compose is what demonstrates the one thing `make verify` cannot: that a retry
+landing on a *different* gateway replica returns the cached result instead of
+charging twice. That behaviour depends on shared Redis state, so it needs
+more than one process to be meaningful.
 
 ## The services
 

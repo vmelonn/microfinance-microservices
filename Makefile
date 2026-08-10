@@ -24,16 +24,20 @@ TESTED := ace-stub ledger-service
 
 .DEFAULT_GOAL := help
 .PHONY: help install test test-shared test-services lint up down logs smoke \
-        build deploy-dev deploy-prod clean wsdl
+        run verify build deploy-dev deploy-prod clean wsdl
 
 help:
 	@echo "microfinance-microservices"
 	@echo ""
 	@echo "  install       create .venv and install mfcommon + dev deps"
 	@echo "  test          run every suite (shared + per-service)"
-	@echo "  up            docker compose up --build"
+	@echo "  verify        start all 8 services as processes, prove the"
+	@echo "                REST->SOAP->ISO 8583->REST path, tear down."
+	@echo "                No Docker required."
+	@echo "  run           same, but leave it running on :18080"
+	@echo "  up            docker compose up --build (needs a container engine)"
 	@echo "  down          stop and remove containers"
-	@echo "  smoke         end-to-end purchase against localhost:8080"
+	@echo "  smoke         end-to-end purchase against a running compose stack"
 	@echo "  build         build all service images"
 	@echo "  deploy-dev    oc apply -k openshift/overlays/dev"
 	@echo "  wsdl          print the service contract"
@@ -64,6 +68,15 @@ test-services:
 
 lint:
 	@$(PY) -m compileall -q libs services && echo "syntax OK"
+
+# The whole platform as plain processes -- no container engine needed.
+# SQLite stands in for Postgres, in-memory state for Redis, so this cannot
+# demonstrate cross-replica behaviour. Use `make up` for that.
+verify:
+	@$(PY) scripts/run_local.py --verify
+
+run:
+	@$(PY) scripts/run_local.py
 
 up:
 	docker compose up --build
