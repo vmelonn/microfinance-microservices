@@ -29,13 +29,30 @@ jobs:
           namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
           insecure_skip_tls_verify: true
 
+      - name: Patch YAMLs for OpenShift Security Constraints
+        run: |
+          # Strip out hardcoded Linux groups and users that OpenShift blocks
+          find openshift/ -type f -name "*.yaml" -exec sed -i '/fsGroup:/d' {} +
+          find openshift/ -type f -name "*.yaml" -exec sed -i '/runAsUser:/d' {} +
+
       - name: Apply Kubernetes Configurations
         run: |
           oc apply -k openshift/overlays/dev
 
+      - name: Ensure Infrastructure is Ready (Databases & Volumes)
+        run: |
+          echo "Waiting for PostgreSQL to start..."
+          oc rollout status statefulset/postgres --timeout=3m
+          
+          echo "Creating missing databases if they don't exist..."
+          oc exec postgres-0 -- sh -c 'psql -U $POSTGRES_USER -c "CREATE DATABASE auth;"' || true
+          oc exec postgres-0 -- sh -c 'psql -U $POSTGRES_USER -c "CREATE DATABASE ledger;"' || true
+          
+          echo "Attaching HSM storage volume to ISO8583 adapter..."
+          oc set volume deployment/iso8583-adapter --add --name=hsm-storage --type=emptyDir --mount-path=/var/hsm --overwrite || true
+
       - name: Trigger Builds and Wait
         run: |
-          # Trigger builds one by one and follow their progress
           for svc in api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service; do
             echo "Starting build for $svc..."
             oc start-build $svc --follow
