@@ -97,6 +97,61 @@ class Database:
         conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
+    def wait_until_available(self, timeout: float = 90.0, interval: float = 2.0) -> None:
+        """
+        Block until the database accepts a connection, or give up after
+        `timeout` seconds.
+
+        WHY THIS EXISTS. Without it, a service whose lifespan connects at
+        startup simply crashes when the database is not up yet, and relies on
+        the container being restarted enough times to eventually get lucky.
+        That is not merely untidy -- on a cold namespace where Postgres and
+        the services are created together, auth-service and ledger-service
+        each racked up restarts before stabilising, and a Postgres that took
+        longer would have left them in CrashLoopBackOff with its exponential
+        backoff making recovery slower the longer the outage lasted.
+
+        Retrying here means the pod stays up and simply is not READY until the
+        database answers -- which is exactly what a readiness probe is for.
+        Kubernetes keeps traffic away, nothing restarts, and the service comes
+        up on its own the moment Postgres does.
+
+        It still gives up eventually. A service that cannot reach its database
+        after 90 seconds has a real problem -- a wrong DSN, a missing Secret,
+        a NetworkPolicy -- and crashing loudly is better than retrying in
+        silence forever.
+        """
+        import time
+
+        deadline = time.monotonic() + timeout
+        attempt = 0
+        last_error: Exception | None = None
+
+        while time.monotonic() < deadline:
+            attempt += 1
+            try:
+                conn = self.connect()
+                conn.close()
+                if attempt > 1:
+                    print(f"[db] connected after {attempt} attempts")
+                return
+            except Exception as exc:  # noqa: BLE001 - driver-specific, all mean "not yet"
+                last_error = exc
+                print(f"[db] not ready (attempt {attempt}): {exc}")
+                time.sleep(interval)
+
+        raise RuntimeError(
+            f"Database at {self._safe_dsn()} did not accept a connection within "
+            f"{timeout:.0f}s after {attempt} attempts. Last error: {last_error!r}"
+        )
+
+    def _safe_dsn(self) -> str:
+        """The DSN with any password removed, so it can go in a log line."""
+        if not self.is_postgres:
+            return self.dsn
+        # postgresql://user:password@host:port/db -> postgresql://user@host:port/db
+        return re.sub(r"://([^:/@]+):[^@]*@", r"://\1@", self.dsn)
+
     @contextmanager
     def transaction(self):
         """

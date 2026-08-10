@@ -76,6 +76,9 @@ def _init_schema(db: Database) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db = Database(AUTH_DSN)
+    # See the note in ledger-service: wait for the database instead of
+    # relying on container restarts to eventually catch it awake.
+    db.wait_until_available()
     _init_schema(db)
     app.state.db = db
     log.info(f"auth-service ready on {db.dialect}")

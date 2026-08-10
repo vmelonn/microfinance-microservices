@@ -30,6 +30,13 @@ import uuid
 GATEWAY_1 = "http://localhost:8080"
 GATEWAY_2 = "http://localhost:8081"   # the second replica
 
+# Set by --insecure. An OpenShift Route frequently terminates TLS with a cert
+# signed by the cluster's own CA, which no CI runner trusts by default -- and
+# the failure is CERTIFICATE_VERIFY_FAILED, which says nothing about it being
+# a trust problem rather than the service being down. Opt-in only, so nobody
+# turns verification off without meaning to.
+_SSL_CONTEXT = None
+
 PASS, FAIL = "  PASS", "  FAIL"
 failures = []
 
@@ -41,7 +48,7 @@ def call(base, method, path, body=None, token=None):
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=45) as response:
+        with urllib.request.urlopen(request, timeout=45, context=_SSL_CONTEXT) as response:
             return response.status, json.loads(response.read() or b"{}")
     except urllib.error.HTTPError as exc:
         raw = exc.read()
@@ -191,11 +198,24 @@ if __name__ == "__main__":
             "Omit it for docker-compose, which exposes both replicas separately."
         ),
     )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Skip TLS verification. Needed when the Route uses the cluster's own CA.",
+    )
     args = parser.parse_args()
 
     if args.base:
         base = args.base.rstrip("/")
         GATEWAY_1 = GATEWAY_2 = base
         print(f"targeting {base} (single endpoint -- the Route load-balances across replicas)")
+
+    if args.insecure:
+        import ssl
+
+        _SSL_CONTEXT = ssl.create_default_context()
+        _SSL_CONTEXT.check_hostname = False
+        _SSL_CONTEXT.verify_mode = ssl.CERT_NONE
+        print("TLS verification DISABLED (--insecure)")
 
     sys.exit(main())

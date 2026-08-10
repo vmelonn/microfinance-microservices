@@ -40,41 +40,23 @@ data:
   CLICKHOUSE_DB: "analytics"
 
 ---
-# Secret TEMPLATE. The values below are placeholders and MUST be replaced.
+# NOTE: the `microfinance-secrets` Secret is deliberately NOT in this file,
+# and NOT in kustomization.yaml.
 #
-# This file exists so the required keys are documented and `oc apply -k`
-# works on a fresh cluster. It is NOT how secrets should reach production:
-# use Sealed Secrets, External Secrets, or the cluster's vault integration,
-# and keep real values out of git entirely.
+# It used to be, and that was a bug: every `oc apply -k` overwrote the real
+# generated values with the repo's REPLACE-ME placeholders. The consequences
+# were quiet and nasty -- every JWT issued before a deploy stopped verifying
+# after it, and rotating HSM_MASTER_KEY_HEX made any PIN block encrypted
+# under the old one permanently undecryptable.
 #
-# stringData rather than data, so the values are readable and reviewable
-# rather than base64 that hides a typo until runtime.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: microfinance-secrets
-  annotations:
-    microfinance.io/warning: "Placeholder values. Replace before any real deployment."
-type: Opaque
-stringData:
-  # Signs every JWT. Every gateway replica and auth-service MUST share it --
-  # a token issued by one has to verify on another. Rotating it invalidates
-  # every live session, so rotation needs a two-key overlap period.
-  JWT_SECRET: "REPLACE-ME-generate-with-openssl-rand-hex-32"
-
-  POSTGRES_PASSWORD: "REPLACE-ME"
-
-  # 32 bytes of hex, wrapping the HSM base key.
-  #
-  # LOSING THIS IS UNRECOVERABLE. It decrypts the persisted base key, from
-  # which every per-transaction PIN key is derived. Without it, the
-  # persistence file is inert and the adapter silently falls back to
-  # generating an ephemeral key -- so PIN blocks encrypted before the loss
-  # can never be decrypted again. Back it up somewhere that is not this
-  # cluster.
-  HSM_MASTER_KEY_HEX: "REPLACE-ME-generate-with-openssl-rand-hex-32"
-
-  CLICKHOUSE_PASSWORD: ""
+# It is now created ONCE, out of band, and left alone by every subsequent
+# deploy. See openshift/secret-template.yaml, or:
+#
+#   oc create secret generic microfinance-secrets \
+#     --from-literal=JWT_SECRET="$(openssl rand -hex 32)" \
+#     --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 16)" \
+#     --from-literal=HSM_MASTER_KEY_HEX="$(openssl rand -hex 32)" \
+#     --from-literal=CLICKHOUSE_PASSWORD=""
 
 ---
 # The single public entry point. Nothing else in this namespace has a Route.

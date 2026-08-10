@@ -1,147 +1,224 @@
-name: OpenShift CI/CD Multi-Job Pipeline
+name: OpenShift CI/CD
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:        # lets you re-run a deploy without an empty commit
+
+# Two pushes in quick succession would otherwise race: one deploy rolling out
+# while another rebuilds the images underneath it. Queue them instead.
+concurrency:
+  group: openshift-deploy
+  cancel-in-progress: false
+
+env:
+  # Every service with a Dockerfile. Previously this list held six, and the
+  # three missing ones -- ace-stub and host-simulator especially -- are on the
+  # critical path: without them there is no SOAP gateway and no switch, so
+  # every transaction fails while the pipeline still reports green.
+  SERVICES: >-
+    api-gateway auth-service transaction-service risk-service ledger-service
+    iso8583-adapter ace-stub host-simulator analytics-sync
 
 jobs:
-  setup-infrastructure:
-    name: 1. Setup Infrastructure
+  # ---------------------------------------------------------------------
+  # Cheapest signal first. Ten seconds of unit tests before spending nine
+  # cluster builds finding out the code is broken.
+  # ---------------------------------------------------------------------
+  test:
+    name: 1 · Unit tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install OpenShift CLI (oc)
-        run: |
-          curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz -o oc.tar.gz
-          tar -xzf oc.tar.gz
-          sudo mv oc /usr/local/bin/
-          rm -f oc.tar.gz README.md
-
-      - name: Log in to OpenShift
-        uses: redhat-actions/oc-login@v1
+      - uses: actions/setup-python@v5
         with:
-          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
-          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
-          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
-          insecure_skip_tls_verify: true
+          python-version: "3.12"
 
-      - name: Patch YAMLs for OpenShift Security Constraints
+      - name: Install
         run: |
-          find openshift/ -type f -name "*.yaml" -exec sed -i '/fsGroup:/d' {} +
-          find openshift/ -type f -name "*.yaml" -exec sed -i '/runAsUser:/d' {} +
+          python -m pip install --quiet --upgrade pip
+          pip install --quiet -e "libs/mfcommon[dev]"
+          pip install --quiet fastapi "uvicorn[standard]" httpx pydantic
 
-      - name: Apply Kubernetes Configurations
-        run: oc apply -k openshift/overlays/dev
+      - name: Shared suites (mfcommon + DFDL conformance)
+        run: pytest libs/mfcommon/tests tests -q
 
-      - name: Initialize Databases & Volumes
+      - name: Per-service suites
+        # Each service owns a top-level `app` package, so they cannot share a
+        # sys.path -- two services' app.main would shadow each other. Hence
+        # one pytest run per service.
         run: |
-          oc rollout status statefulset/postgres --timeout=3m || true
-          oc exec postgres-0 -- sh -c 'psql -U $POSTGRES_USER -c "CREATE DATABASE auth;"' || true
-          oc exec postgres-0 -- sh -c 'psql -U $POSTGRES_USER -c "CREATE DATABASE ledger;"' || true
-          oc set volume deployment/iso8583-adapter --add --name=hsm-storage --type=emptyDir --mount-path=/var/hsm --overwrite || true
-
-  build-services:
-    name: 2. Build Services
-    needs: setup-infrastructure
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [api-gateway, auth-service, ledger-service, iso8583-adapter, risk-service, transaction-service]
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install OpenShift CLI (oc)
-        run: |
-          curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz -o oc.tar.gz
-          tar -xzf oc.tar.gz
-          sudo mv oc /usr/local/bin/
-          rm -f oc.tar.gz README.md
-
-      - name: Log in to OpenShift
-        uses: redhat-actions/oc-login@v1
-        with:
-          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
-          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
-          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
-          insecure_skip_tls_verify: true
-
-      - name: Start Build (Parallel)
-        run: oc start-build ${{ matrix.service }} --follow
-
-  deploy-and-test:
-    name: 3. Rollout & Smoke Test
-    needs: build-services
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install OpenShift CLI (oc)
-        run: |
-          curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz -o oc.tar.gz
-          tar -xzf oc.tar.gz
-          sudo mv oc /usr/local/bin/
-          rm -f oc.tar.gz README.md
-
-      - name: Log in to OpenShift
-        uses: redhat-actions/oc-login@v1
-        with:
-          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
-          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
-          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
-          insecure_skip_tls_verify: true
-
-      - name: Rollout Deployments and Test
-        run: |
-          for svc in api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service; do
-            echo "----------------------------------------"
-            echo "Restarting and rolling out $svc..."
-            oc rollout restart deployment/$svc
-            
-            echo "Waiting for $svc pods to become ready..."
-            attempts=0
-            max_attempts=36  # Tries for up to 3 minutes (36 * 5 seconds)
-            
-            while [ $attempts -lt $max_attempts ]; do
-              READY_REPLICAS=$(oc get deployment $svc -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-              DESIRED_REPLICAS=$(oc get deployment $svc -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
-              
-              if [ "$READY_REPLICAS" = "$DESIRED_REPLICAS" ] && [ "$READY_REPLICAS" != "" ]; then
-                echo "✅ $svc successfully rolled out and ready!"
-                break
-              fi
-              
-              sleep 5
-              attempts=$((attempts+1))
-            done
-            
-            if [ $attempts -eq $max_attempts ]; then
-              echo "❌ ERROR: Rollout timed out for $svc. Fetching pod logs for diagnosis..."
-              POD_NAME=$(oc get pods -l app.kubernetes.io/name=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-              if [ -n "$POD_NAME" ]; then
-                oc logs $POD_NAME --tail=50 || true
-              else
-                oc logs deployment/$svc --tail=50 || true
-              fi
-              exit 1
-            fi
+          for svc in ace-stub ledger-service; do
+            echo "=== $svc ==="
+            PYTHONPATH="services/$svc" \
+            WSDL_PATH="ace/Iso8583Library/wsdl/Iso8583Gateway.wsdl" \
+            pytest "services/$svc/tests" -q -p no:cacheprovider
           done
 
-          echo "All rollouts successful! Running end-to-end smoke test..."
-          GATEWAY_POD=$(oc get pods -l app.kubernetes.io/name=api-gateway -o jsonpath='{.items[0].metadata.name}')
-          ROUTE_URL="https://$(oc get route api-gateway -o jsonpath='{.spec.host}')"
-          oc cp scripts/smoke_test.py $GATEWAY_POD:/tmp/smoke_test.py
-          oc exec $GATEWAY_POD -- python /tmp/smoke_test.py --base "$ROUTE_URL"
+  # ---------------------------------------------------------------------
+  # ImageStreams, BuildConfigs, and the platform manifests.
+  # ---------------------------------------------------------------------
+  infrastructure:
+    name: 2 · Infrastructure
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-    
+      - uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          oc: "4"
 
-      - name: Run End-to-End Smoke Test
+      - uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
+          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
+          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
+          insecure_skip_tls_verify: true
+
+      # Bootstrap the Secret only if it does not already exist.
+      #
+      # It is NOT part of the kustomize base any more. When it was, every
+      # deploy overwrote the real values with the repo's REPLACE-ME
+      # placeholders -- which silently invalidated every live JWT and, worse,
+      # made any PIN block encrypted under the previous HSM_MASTER_KEY_HEX
+      # permanently undecryptable.
+      - name: Ensure secrets exist (never overwrite)
         run: |
-          GATEWAY_POD=$(oc get pods -l app.kubernetes.io/name=api-gateway -o jsonpath='{.items[0].metadata.name}')
-          ROUTE_URL="https://$(oc get route api-gateway -o jsonpath='{.spec.host}')"
-          oc cp scripts/smoke_test.py $GATEWAY_POD:/tmp/smoke_test.py
-          oc exec $GATEWAY_POD -- python /tmp/smoke_test.py --base "$ROUTE_URL"
+          if oc get secret microfinance-secrets >/dev/null 2>&1; then
+            echo "microfinance-secrets already exists -- leaving it alone."
+          else
+            echo "creating microfinance-secrets with generated values"
+            oc create secret generic microfinance-secrets \
+              --from-literal=JWT_SECRET="$(openssl rand -hex 32)" \
+              --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 16)" \
+              --from-literal=HSM_MASTER_KEY_HEX="$(openssl rand -hex 32)" \
+              --from-literal=CLICKHOUSE_PASSWORD=""
+          fi
+
+      # ImageStreams and BuildConfigs. Previously missing entirely, so
+      # `oc start-build` only worked because they had been created by hand --
+      # a fresh namespace would have failed at the build step.
+      - name: Apply ImageStreams and BuildConfigs
+        run: oc apply -f openshift/build/build.yaml
+
+      # NOTE: the `sed -i '/fsGroup:/d'` step that used to live here is gone.
+      # The manifests no longer set fsGroup at all -- restricted-v2 allocates
+      # one from the namespace range and rejects hardcoded values, so the
+      # correct fix was to remove it at the source rather than strip it with a
+      # blind text delete across every YAML file.
+      - name: Apply platform manifests
+        run: oc apply -k openshift/overlays/dev
+
+  # ---------------------------------------------------------------------
+  # All nine images, in parallel.
+  # ---------------------------------------------------------------------
+  build:
+    name: 3 · Build
+    needs: infrastructure
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false        # one broken service should not hide the others
+      matrix:
+        service:
+          - api-gateway
+          - auth-service
+          - transaction-service
+          - risk-service
+          - ledger-service
+          - iso8583-adapter
+          - ace-stub          # the SOAP gateway -- nothing works without it
+          - host-simulator    # the switch -- likewise
+          - analytics-sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          oc: "4"
+
+      - uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
+          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
+          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
+          insecure_skip_tls_verify: true
+
+      # --wait as well as --follow: --follow streams the log, --wait is what
+      # makes a failed build fail this job rather than quietly moving on to
+      # roll out a stale image.
+      - name: Build ${{ matrix.service }}
+        run: oc start-build ${{ matrix.service }} --follow --wait
+
+  # ---------------------------------------------------------------------
+  # Roll out, wait, then prove it actually works.
+  # ---------------------------------------------------------------------
+  deploy:
+    name: 4 · Rollout and smoke test
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          oc: "4"
+
+      - uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
+          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
+          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
+          insecure_skip_tls_verify: true
+
+      # Ordered: the switch and the SOAP gateway first, then the services that
+      # depend on them, then the edge. A gateway that rolls out before the
+      # adapter is ready fails its own readiness probe and slows the rollout
+      # down for no reason.
+      - name: Roll out
+        run: |
+          set -euo pipefail
+          for svc in host-simulator ace-stub iso8583-adapter \
+                     ledger-service auth-service risk-service \
+                     transaction-service api-gateway; do
+            echo "::group::$svc"
+            oc rollout restart deployment/$svc
+
+            # `oc rollout status` is the right tool -- the previous hand-rolled
+            # polling loop existed to work around rollouts that never
+            # completed, and those were caused by the crash-looping this
+            # commit fixes (no databases, missing /var/hsm), not by the
+            # command being unreliable.
+            if ! oc rollout status deployment/$svc --timeout=5m; then
+              echo "::error::rollout failed for $svc"
+              oc describe deployment/$svc | tail -30
+              oc logs deployment/$svc --tail=80 --all-containers || true
+              # Events explain the failures logs cannot: image pull errors,
+              # SCC rejections, unschedulable pods.
+              oc get events --sort-by=.lastTimestamp | grep -i "$svc" | tail -20 || true
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+
+      # Runs from the runner against the public Route, not via `oc exec` into
+      # a pod. Simpler, and it exercises the same path a real client takes --
+      # through the Route and the router -- rather than requiring the pod to
+      # reach its own external hostname.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          ROUTE="https://$(oc get route api-gateway -o jsonpath='{.spec.host}')"
+          echo "target: $ROUTE"
+          python scripts/smoke_test.py --base "$ROUTE" --insecure
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          oc get pods -o wide
+          oc get events --sort-by=.lastTimestamp | tail -40

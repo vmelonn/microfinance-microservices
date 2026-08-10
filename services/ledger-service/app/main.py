@@ -1,4 +1,4 @@
-"""
+﻿"""
 ledger-service -- owns accounts, cards, and the double-entry ledger.
 
 Every route is under /internal. This service has NO OpenShift Route and is
@@ -41,6 +41,10 @@ log = configure_logging("ledger-service", os.environ.get("LOG_LEVEL", "INFO"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db = Database(LEDGER_DSN)
+    # Wait for Postgres rather than crashing when it is not up yet. On a cold
+    # namespace the database and this service start together, and failing
+    # fast here just means restart-looping until the timing happens to work.
+    db.wait_until_available()
     repo = LedgerRepository(db)
     repo.init_schema()
     app.state.repo = repo

@@ -71,6 +71,45 @@ spec:
   ports: [{port: 6379, targetPort: 6379, name: redis}]
 
 ---
+# Creates one database per service on FIRST start of the Postgres volume.
+#
+# The official image runs every *.sh in /docker-entrypoint-initdb.d/ exactly
+# once, when PGDATA is empty. Without this, `auth` and `ledger` simply do not
+# exist and both services crash-loop on startup -- which previously had to be
+# fixed by hand with `oc exec postgres-0 -- psql -c "CREATE DATABASE ..."`
+# after every fresh deploy. That step is no longer needed.
+#
+# IMPORTANT: this only fires on an EMPTY volume. An existing postgres-0 keeps
+# whatever databases it already has; to pick this up on an existing install
+# you would delete the PVC, which destroys the data. On a namespace where the
+# databases were already created by hand, nothing changes and nothing breaks.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: microfinance
+data:
+  init-databases.sh: |
+    #!/bin/bash
+    # Database-per-service is about OWNERSHIP -- who may migrate a schema, who
+    # breaks when a column changes -- not about how many servers are running.
+    # In production these would be separate StatefulSets; one server with two
+    # databases gives the same isolation for a fraction of the memory.
+    set -euo pipefail
+
+    for db in auth ledger; do
+        echo "creating database '$db'"
+        psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
+            CREATE DATABASE "$db";
+            GRANT ALL PRIVILEGES ON DATABASE "$db" TO "$POSTGRES_USER";
+    EOSQL
+    done
+
+    echo "databases ready: auth, ledger"
+
+---
 # Postgres -- the operational database for auth-service and ledger-service.
 #
 # StatefulSet with a PVC, because this holds money and losing it is not
@@ -97,7 +136,14 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        fsGroup: 26              # the postgres UID in the official image
+        # NO fsGroup. OpenShift's restricted-v2 SCC allocates one from the
+        # namespace's own range and REJECTS any explicit value outside it, so
+        # hardcoding 26 blocked the pod outright. Omitting it lets the SCC
+        # assign a valid one, which also gets the volume ownership right.
+        #
+        # This is why the pipeline had a `sed -i '/fsGroup:/d'` step. That
+        # hack can now be deleted -- a blind text delete across every YAML was
+        # always going to remove the wrong line eventually.
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: postgres
@@ -116,6 +162,10 @@ spec:
           ports: [{containerPort: 5432, name: postgres}]
           volumeMounts:
             - {name: data, mountPath: /var/lib/postgresql/data}
+            # Runs once, on an empty volume, creating the auth and ledger
+            # databases. Replaces the manual `oc exec postgres-0 -- psql`
+            # step the pipeline used to need.
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
           resources:
             requests: {cpu: 100m, memory: 256Mi}
             limits: {memory: 1Gi}
@@ -130,6 +180,14 @@ spec:
             exec: {command: [pg_isready, -U, microfinance]}
             initialDelaySeconds: 5
             periodSeconds: 5
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+            # 0755: the entrypoint EXECUTES these, and a ConfigMap's default
+            # 0644 makes it silently skip them -- no error, just databases
+            # that never get created.
+            defaultMode: 0755
   volumeClaimTemplates:
     - metadata: {name: data}
       spec:
@@ -173,7 +231,8 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        fsGroup: 101             # the clickhouse UID in the official image
+        # No fsGroup, for the same reason as Postgres above: restricted-v2
+        # assigns one from the namespace range and rejects hardcoded values.
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: clickhouse

@@ -46,15 +46,35 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value: {name: ALLOW_LEDGER_RESET, value: "1"}
 
-  # Ephemeral HSM key. No PVC in dev, so the base key regenerates on every
-  # restart -- fine when nothing persists across a redeploy anyway, and it
-  # keeps dev from holding a volume it does not need.
+  # Ephemeral HSM key: swap the PVC for an emptyDir, keeping the mount.
+  #
+  # This previously REMOVED the volume and its mount, which was a bug. The
+  # container still had HSM_KEY_PERSISTENCE_PATH=/var/hsm/base-key.enc in its
+  # environment, so MockHSM tried to write into a directory that no longer
+  # existed and died with FileNotFoundError at startup. That is what made
+  # `oc set volume deployment/iso8583-adapter --add --type=emptyDir` necessary
+  # by hand after every deploy -- and that imperative patch was silently
+  # reverted by the next `oc apply -k`.
+  #
+  # An emptyDir keeps the path valid and still gives the intended behaviour:
+  # the volume dies with the pod, so the base key is regenerated on every
+  # restart. Fine in dev, where nothing needs to survive a redeploy.
   - target: {kind: Deployment, name: iso8583-adapter}
     patch: |-
-      - op: remove
-        path: /spec/template/spec/containers/0/volumeMounts/1
-      - op: remove
+      - op: replace
         path: /spec/template/spec/volumes/1
+        value:
+          name: hsm-key
+          emptyDir: {}
+
+  # minAvailable: 1 against a single replica means a node drain can NEVER
+  # evict this pod -- the budget is unsatisfiable, so the drain blocks
+  # indefinitely. Dev runs one replica, so the budget has to allow zero.
+  - target: {kind: PodDisruptionBudget, name: api-gateway}
+    patch: |-
+      - op: replace
+        path: /spec/minAvailable
+        value: 0
 
   # Autoscaling off. An HPA fighting a fixed replica count produces
   # confusing churn in an environment nobody is load-testing.
