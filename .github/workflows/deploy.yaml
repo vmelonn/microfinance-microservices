@@ -15,9 +15,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install OpenShift CLI (oc)
-        uses: redhat-actions/openshift-tools-installer@v1
-        with:
-          oc: "latest"
+        run: |
+          curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz -o oc.tar.gz
+          tar -xzf oc.tar.gz
+          sudo mv oc /usr/local/bin/
+          rm -f oc.tar.gz README.md
 
       - name: Log in to OpenShift
         uses: redhat-actions/oc-login@v1
