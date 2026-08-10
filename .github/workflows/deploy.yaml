@@ -7,7 +7,7 @@ on:
 
 jobs:
   deploy-and-test:
-    runs-name: Deploy to OpenShift and Run Smoke Test
+    name: Deploy to OpenShift and Run Smoke Test
     runs-on: ubuntu-latest
 
     steps:
