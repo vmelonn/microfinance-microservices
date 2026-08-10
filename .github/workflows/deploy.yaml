@@ -102,9 +102,25 @@ jobs:
             echo "Restarting and rolling out $svc..."
             oc rollout restart deployment/$svc
             
-            # Watch rollout, and if it times out, instantly dump logs to see why it crashed
-            if ! oc rollout status deployment/$svc --timeout=2m; then
-              echo "❌ ERROR: Rollout failed for $svc. Fetching pod logs for diagnosis..."
+            echo "Waiting for $svc pods to become ready..."
+            attempts=0
+            max_attempts=36  # Tries for up to 3 minutes (36 * 5 seconds)
+            
+            while [ $attempts -lt $max_attempts ]; do
+              READY_REPLICAS=$(oc get deployment $svc -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+              DESIRED_REPLICAS=$(oc get deployment $svc -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+              
+              if [ "$READY_REPLICAS" = "$DESIRED_REPLICAS" ] && [ "$READY_REPLICAS" != "" ]; then
+                echo "✅ $svc successfully rolled out and ready!"
+                break
+              fi
+              
+              sleep 5
+              attempts=$((attempts+1))
+            done
+            
+            if [ $attempts -eq $max_attempts ]; then
+              echo "❌ ERROR: Rollout timed out for $svc. Fetching pod logs for diagnosis..."
               POD_NAME=$(oc get pods -l app.kubernetes.io/name=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
               if [ -n "$POD_NAME" ]; then
                 oc logs $POD_NAME --tail=50 || true
@@ -120,6 +136,8 @@ jobs:
           ROUTE_URL="https://$(oc get route api-gateway -o jsonpath='{.spec.host}')"
           oc cp scripts/smoke_test.py $GATEWAY_POD:/tmp/smoke_test.py
           oc exec $GATEWAY_POD -- python /tmp/smoke_test.py --base "$ROUTE_URL"
+
+    
 
       - name: Run End-to-End Smoke Test
         run: |
