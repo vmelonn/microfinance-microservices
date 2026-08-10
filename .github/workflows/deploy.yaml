@@ -3,7 +3,7 @@ name: OpenShift CI/CD Pipeline
 on:
   push:
     branches:
-      - main # This tells GitHub to run the pipeline every time you push to main
+      - main
 
 jobs:
   deploy-and-test:
@@ -13,6 +13,11 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Install OpenShift CLI (oc)
+        uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          oc: "latest"
 
       - name: Log in to OpenShift
         uses: redhat-actions/oc-login@v1
@@ -24,12 +29,10 @@ jobs:
 
       - name: Apply Kubernetes Configurations
         run: |
-          # Apply any new YAML configuration changes
           oc apply -k openshift/overlays/dev
 
       - name: Trigger Builds and Wait
         run: |
-          # Tell OpenShift to pull the new code and build the microservices
           oc start-build api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service
           
           echo "Waiting for rollouts to complete..."
