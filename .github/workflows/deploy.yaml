@@ -35,15 +35,16 @@ jobs:
 
       - name: Trigger Builds and Wait
         run: |
-          oc start-build api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service
+          # Trigger builds one by one and follow their progress
+          for svc in api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service; do
+            echo "Starting build for $svc..."
+            oc start-build $svc --follow
+          done
           
-          echo "Waiting for rollouts to complete..."
-          oc rollout status deployment/api-gateway --timeout=3m
-          oc rollout status deployment/auth-service --timeout=3m
-          oc rollout status deployment/ledger-service --timeout=3m
-          oc rollout status deployment/iso8583-adapter --timeout=3m
-          oc rollout status deployment/risk-service --timeout=3m
-          oc rollout status deployment/transaction-service --timeout=3m
+          echo "All builds complete. Waiting for rollouts to complete..."
+          for svc in api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service; do
+            oc rollout status deployment/$svc --timeout=3m
+          done
 
       - name: Run End-to-End Smoke Test
         run: |
