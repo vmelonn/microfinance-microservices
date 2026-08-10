@@ -95,12 +95,31 @@ jobs:
           namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
           insecure_skip_tls_verify: true
 
-      - name: Rollout Deployments
+      - name: Rollout Deployments and Test
         run: |
           for svc in api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service; do
+            echo "----------------------------------------"
+            echo "Restarting and rolling out $svc..."
             oc rollout restart deployment/$svc
-            oc rollout status deployment/$svc --timeout=3m
+            
+            # Watch rollout, and if it times out, instantly dump logs to see why it crashed
+            if ! oc rollout status deployment/$svc --timeout=2m; then
+              echo "❌ ERROR: Rollout failed for $svc. Fetching pod logs for diagnosis..."
+              POD_NAME=$(oc get pods -l app.kubernetes.io/name=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+              if [ -n "$POD_NAME" ]; then
+                oc logs $POD_NAME --tail=50 || true
+              else
+                oc logs deployment/$svc --tail=50 || true
+              fi
+              exit 1
+            fi
           done
+
+          echo "All rollouts successful! Running end-to-end smoke test..."
+          GATEWAY_POD=$(oc get pods -l app.kubernetes.io/name=api-gateway -o jsonpath='{.items[0].metadata.name}')
+          ROUTE_URL="https://$(oc get route api-gateway -o jsonpath='{.spec.host}')"
+          oc cp scripts/smoke_test.py $GATEWAY_POD:/tmp/smoke_test.py
+          oc exec $GATEWAY_POD -- python /tmp/smoke_test.py --base "$ROUTE_URL"
 
       - name: Run End-to-End Smoke Test
         run: |
