@@ -1,24 +1,36 @@
-# In-cluster image builds.
+# In-cluster image builds, from Git.
 #
 #     oc apply -f openshift/build/build.yaml
 #     bash scripts/openshift-build.sh
 #
-# BINARY BUILDS, not Git-triggered builds. `oc start-build --from-dir=.`
-# uploads the working tree to the cluster and builds there, which means:
+# GIT SOURCE, not binary. The cluster clones github.com/vmelonn/microfinance-microservices.git
+# at ref `main` and builds from it, which means:
 #
-#   - no local container engine is needed (useful when Docker Desktop is not
-#     running, and when the cluster architecture differs from the laptop's)
-#   - uncommitted work can be deployed, which is what you want while
-#     iterating and emphatically not what you want for production
+#   - every image is traceable to a commit; `oc describe build/<name>-3`
+#     names the exact SHA it came from
+#   - no local container engine, and no upload -- the cluster pulls
+#   - a webhook can rebuild automatically on push (see the bottom of this file)
 #
-# For production, switch source.type to Git with a ref and a webhook so an
-# image is always traceable to a commit. The binary flow deliberately has no
-# such traceability -- that is the trade.
+# BINARY OVERRIDE, when you need it. `oc start-build <svc> --from-dir=.`
+# still works against a Git-source BuildConfig: it uploads your working tree
+# and builds that instead, ignoring Git for that one run. Use it while
+# iterating on something uncommitted; never rely on it for anything you need
+# to reproduce, because the resulting image corresponds to no commit at all.
 #
-# WHY dockerfilePath POINTS INTO services/ : every Dockerfile expects the
-# REPOSITORY ROOT as its build context, because each image installs
-# libs/mfcommon as a real package. Build the whole tree, name the Dockerfile
-# within it.
+# WHY THESE ARE DECLARED RATHER THAN `oc new-app`d
+#
+# `oc new-app <repo> --strategy=docker --context-dir=services/api-gateway`
+# is the obvious one-liner and it does NOT work here. --context-dir sets the
+# build context AND the Dockerfile location together, so the build would run
+# with services/api-gateway/ as its root -- and every Dockerfile in this repo
+# needs the REPOSITORY ROOT as context, because each image installs
+# libs/mfcommon as a real package rather than reaching it through a sys.path
+# hack.
+#
+# What is needed is contextDir unset (root) with dockerfilePath pointing into
+# the subdirectory. That combination has no `oc new-app` flag, which is why
+# these are declared explicitly. Nine near-identical objects is also easier
+# to review and re-apply than nine slightly different command lines.
 
 ---
 # api-gateway -- The only service with a Route.
@@ -32,8 +44,8 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and the manifests in
-  # openshift/base/ carry the other one.
+  # template -- both halves are required, and openshift/base/ carries the
+  # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
 
@@ -47,8 +59,12 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   source:
-    type: Binary
-    binary: {}
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+    # contextDir is deliberately UNSET. The build context is the repository
+    # root; see the note at the top of this file.
   strategy:
     type: Docker
     dockerStrategy:
@@ -57,6 +73,15 @@ spec:
     to:
       kind: ImageStreamTag
       name: api-gateway:latest
+  triggers:
+    # Rebuild when this BuildConfig itself changes.
+    - type: ConfigChange
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # see the instructions at the bottom of this file.
+    - type: GitHub
+      github:
+        secretReference:
+          name: github-webhook-secret
   resources:
     # Builds are short-lived but pip-heavy. Too little memory and the build
     # pod is OOM-killed with a message about the compiler, not about memory.
@@ -80,8 +105,8 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and the manifests in
-  # openshift/base/ carry the other one.
+  # template -- both halves are required, and openshift/base/ carries the
+  # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
 
@@ -95,8 +120,12 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   source:
-    type: Binary
-    binary: {}
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+    # contextDir is deliberately UNSET. The build context is the repository
+    # root; see the note at the top of this file.
   strategy:
     type: Docker
     dockerStrategy:
@@ -105,6 +134,15 @@ spec:
     to:
       kind: ImageStreamTag
       name: auth-service:latest
+  triggers:
+    # Rebuild when this BuildConfig itself changes.
+    - type: ConfigChange
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # see the instructions at the bottom of this file.
+    - type: GitHub
+      github:
+        secretReference:
+          name: github-webhook-secret
   resources:
     # Builds are short-lived but pip-heavy. Too little memory and the build
     # pod is OOM-killed with a message about the compiler, not about memory.
@@ -128,8 +166,8 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and the manifests in
-  # openshift/base/ carry the other one.
+  # template -- both halves are required, and openshift/base/ carries the
+  # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
 
@@ -143,8 +181,12 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   source:
-    type: Binary
-    binary: {}
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+    # contextDir is deliberately UNSET. The build context is the repository
+    # root; see the note at the top of this file.
   strategy:
     type: Docker
     dockerStrategy:
@@ -153,6 +195,15 @@ spec:
     to:
       kind: ImageStreamTag
       name: transaction-service:latest
+  triggers:
+    # Rebuild when this BuildConfig itself changes.
+    - type: ConfigChange
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # see the instructions at the bottom of this file.
+    - type: GitHub
+      github:
+        secretReference:
+          name: github-webhook-secret
   resources:
     # Builds are short-lived but pip-heavy. Too little memory and the build
     # pod is OOM-killed with a message about the compiler, not about memory.
@@ -176,8 +227,8 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and the manifests in
-  # openshift/base/ carry the other one.
+  # template -- both halves are required, and openshift/base/ carries the
+  # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
 
@@ -191,8 +242,12 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   source:
-    type: Binary
-    binary: {}
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+    # contextDir is deliberately UNSET. The build context is the repository
+    # root; see the note at the top of this file.
   strategy:
     type: Docker
     dockerStrategy:
@@ -201,6 +256,15 @@ spec:
     to:
       kind: ImageStreamTag
       name: risk-service:latest
+  triggers:
+    # Rebuild when this BuildConfig itself changes.
+    - type: ConfigChange
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # see the instructions at the bottom of this file.
+    - type: GitHub
+      github:
+        secretReference:
+          name: github-webhook-secret
   resources:
     # Builds are short-lived but pip-heavy. Too little memory and the build
     # pod is OOM-killed with a message about the compiler, not about memory.
@@ -224,8 +288,8 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and the manifests in
-  # openshift/base/ carry the other one.
+  # template -- both halves are required, and openshift/base/ carries the
+  # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
 
@@ -239,8 +303,12 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   source:
-    type: Binary
-    binary: {}
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+    # contextDir is deliberately UNSET. The build context is the repository
+    # root; see the note at the top of this file.
   strategy:
     type: Docker
     dockerStrategy:
@@ -249,6 +317,15 @@ spec:
     to:
       kind: ImageStreamTag
       name: ledger-service:latest
+  triggers:
+    # Rebuild when this BuildConfig itself changes.
+    - type: ConfigChange
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # see the instructions at the bottom of this file.
+    - type: GitHub
+      github:
+        secretReference:
+          name: github-webhook-secret
   resources:
     # Builds are short-lived but pip-heavy. Too little memory and the build
     # pod is OOM-killed with a message about the compiler, not about memory.
@@ -272,8 +349,8 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and the manifests in
-  # openshift/base/ carry the other one.
+  # template -- both halves are required, and openshift/base/ carries the
+  # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
 
@@ -287,8 +364,12 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   source:
-    type: Binary
-    binary: {}
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+    # contextDir is deliberately UNSET. The build context is the repository
+    # root; see the note at the top of this file.
   strategy:
     type: Docker
     dockerStrategy:
@@ -297,6 +378,15 @@ spec:
     to:
       kind: ImageStreamTag
       name: iso8583-adapter:latest
+  triggers:
+    # Rebuild when this BuildConfig itself changes.
+    - type: ConfigChange
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # see the instructions at the bottom of this file.
+    - type: GitHub
+      github:
+        secretReference:
+          name: github-webhook-secret
   resources:
     # Builds are short-lived but pip-heavy. Too little memory and the build
     # pod is OOM-killed with a message about the compiler, not about memory.
@@ -320,8 +410,8 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and the manifests in
-  # openshift/base/ carry the other one.
+  # template -- both halves are required, and openshift/base/ carries the
+  # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
 
@@ -335,8 +425,12 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   source:
-    type: Binary
-    binary: {}
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+    # contextDir is deliberately UNSET. The build context is the repository
+    # root; see the note at the top of this file.
   strategy:
     type: Docker
     dockerStrategy:
@@ -345,6 +439,15 @@ spec:
     to:
       kind: ImageStreamTag
       name: ace-stub:latest
+  triggers:
+    # Rebuild when this BuildConfig itself changes.
+    - type: ConfigChange
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # see the instructions at the bottom of this file.
+    - type: GitHub
+      github:
+        secretReference:
+          name: github-webhook-secret
   resources:
     # Builds are short-lived but pip-heavy. Too little memory and the build
     # pod is OOM-killed with a message about the compiler, not about memory.
@@ -368,8 +471,8 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and the manifests in
-  # openshift/base/ carry the other one.
+  # template -- both halves are required, and openshift/base/ carries the
+  # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
 
@@ -383,8 +486,12 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   source:
-    type: Binary
-    binary: {}
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+    # contextDir is deliberately UNSET. The build context is the repository
+    # root; see the note at the top of this file.
   strategy:
     type: Docker
     dockerStrategy:
@@ -393,6 +500,15 @@ spec:
     to:
       kind: ImageStreamTag
       name: host-simulator:latest
+  triggers:
+    # Rebuild when this BuildConfig itself changes.
+    - type: ConfigChange
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # see the instructions at the bottom of this file.
+    - type: GitHub
+      github:
+        secretReference:
+          name: github-webhook-secret
   resources:
     # Builds are short-lived but pip-heavy. Too little memory and the build
     # pod is OOM-killed with a message about the compiler, not about memory.
@@ -416,8 +532,8 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and the manifests in
-  # openshift/base/ carry the other one.
+  # template -- both halves are required, and openshift/base/ carries the
+  # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
 
@@ -431,8 +547,12 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   source:
-    type: Binary
-    binary: {}
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+    # contextDir is deliberately UNSET. The build context is the repository
+    # root; see the note at the top of this file.
   strategy:
     type: Docker
     dockerStrategy:
@@ -441,6 +561,15 @@ spec:
     to:
       kind: ImageStreamTag
       name: analytics-sync:latest
+  triggers:
+    # Rebuild when this BuildConfig itself changes.
+    - type: ConfigChange
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # see the instructions at the bottom of this file.
+    - type: GitHub
+      github:
+        secretReference:
+          name: github-webhook-secret
   resources:
     # Builds are short-lived but pip-heavy. Too little memory and the build
     # pod is OOM-killed with a message about the compiler, not about memory.
@@ -451,3 +580,32 @@ spec:
       memory: 2Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
+
+---
+# Shared secret for the GitHub webhook triggers above.
+#
+# PLACEHOLDER. Replace it before registering any webhook -- anyone holding
+# this value can trigger builds in your namespace:
+#
+#     oc create secret generic github-webhook-secret \
+#       --from-literal=WebHookSecretKey="$(openssl rand -hex 20)" \
+#       --dry-run=client -o yaml | oc apply -f -
+#
+# Then, for each service, get its webhook URL and add it in GitHub under
+# Settings -> Webhooks (content type: application/json):
+#
+#     oc describe bc/api-gateway | grep -A1 'Webhook GitHub'
+#
+# Nine services means nine webhooks, which is tedious. A reasonable
+# alternative for a repo this size is to skip webhooks entirely and rebuild
+# explicitly with `make oc-build` -- nine services rarely all need rebuilding
+# on every push anyway, and an explicit build is one fewer moving part.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-webhook-secret
+  annotations:
+    microfinance.io/warning: "Placeholder. Replace before registering a webhook."
+type: Opaque
+stringData:
+  WebHookSecretKey: "REPLACE-ME-openssl-rand-hex-20"

@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 #
-# Build all nine images inside the OpenShift cluster.
+# Build the images inside the OpenShift cluster.
 #
-#     bash scripts/openshift-build.sh              # build everything
-#     bash scripts/openshift-build.sh api-gateway  # rebuild just one
+#     bash scripts/openshift-build.sh                     # all nine, from Git
+#     bash scripts/openshift-build.sh api-gateway         # just one
+#     bash scripts/openshift-build.sh --local api-gateway # from the working tree
 #
-# Requires: oc, and an active login (`oc whoami` should succeed).
-# Does NOT require a local container engine -- the build happens in the
-# cluster, from an upload of the working tree.
+# DEFAULT: the cluster clones the GitHub repo at the ref in
+# openshift/build/build.yaml and builds from it. Every resulting image is
+# traceable to a commit.
 #
-# Run from the repository root; the whole tree is the build context, because
-# every image installs libs/mfcommon as a real package rather than reaching
-# it through a sys.path hack.
+# --local: uploads YOUR WORKING TREE instead and builds that, ignoring Git for
+# this run. Useful while iterating on something uncommitted. The resulting
+# image corresponds to no commit, so never use it for anything you need to
+# reproduce -- and note it will happily ship your uncommitted debugging.
+#
+# Requires: oc, and an active login. Does NOT require a local container engine.
 
 set -euo pipefail
 
@@ -46,22 +50,50 @@ echo "namespace: ${NAMESPACE}"
 echo "user:      $(oc whoami)"
 echo
 
-# Build only what was named, or everything.
-TARGETS=("$@")
+FROM_LOCAL=0
+TARGETS=()
+for arg in "$@"; do
+  case "$arg" in
+    --local) FROM_LOCAL=1 ;;
+    -*)      echo "unknown flag: $arg"; exit 1 ;;
+    *)       TARGETS+=("$arg") ;;
+  esac
+done
+
 if [ ${#TARGETS[@]} -eq 0 ]; then
   TARGETS=("${SERVICES[@]}")
 fi
 
-# .dockerignore keeps the upload small -- without it the whole .git directory
-# and the local venv would be shipped to the cluster on every build.
+if [ "$FROM_LOCAL" -eq 1 ]; then
+  echo "source:    LOCAL WORKING TREE (not Git -- these images match no commit)"
+  if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+    echo "           note: you have uncommitted changes, and they WILL be built"
+  fi
+else
+  echo "source:    Git, per the BuildConfig"
+fi
+echo
+
 for svc in "${TARGETS[@]}"; do
   echo "=== ${svc} ==="
-  # --follow streams the build log, so a failure is visible immediately
-  # rather than after a silent wait. --wait makes a failed build fail this
-  # script, which is what stops a deploy from rolling out a stale image.
-  oc start-build "${svc}" --from-dir=. --follow --wait
+  # --follow streams the build log, so a failure is visible immediately rather
+  # than after a silent wait. --wait makes a failed build fail this script,
+  # which is what stops a deploy from rolling out a stale image.
+  if [ "$FROM_LOCAL" -eq 1 ]; then
+    # .dockerignore keeps this upload small -- without it the whole .git
+    # directory and the local venv would go over the network every build.
+    oc start-build "${svc}" --from-dir=. --follow --wait
+  else
+    oc start-build "${svc}" --follow --wait
+  fi
   echo
 done
 
 echo "All builds complete. Images are in the internal registry as ImageStreams:"
 oc get imagestream -o custom-columns=NAME:.metadata.name,TAGS:.status.tags[*].tag 2>/dev/null || true
+
+if [ "$FROM_LOCAL" -eq 0 ]; then
+  echo
+  echo "Each image is traceable to its commit:"
+  echo "  oc describe bc/api-gateway | grep -i 'commit\\|ref'"
+fi

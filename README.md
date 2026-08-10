@@ -239,12 +239,47 @@ named user's home and runs `chgrp -R 0 /app && chmod -R g=u /app`. Getting
 this wrong surfaces as `executable file not found in $PATH` — not a
 permission error — which sends you looking in entirely the wrong place.
 
+### Where the images come from
+
+The BuildConfigs use **Git source** — the cluster clones this repo and builds
+from it, so every image is traceable to a commit:
+
+```bash
+oc describe bc/api-gateway | grep -i 'commit\|ref'
+```
+
+`oc new-app <repo> --context-dir=services/api-gateway` is the obvious
+one-liner and it does **not** work here: `--context-dir` sets the build
+context *and* the Dockerfile location together, so the build would run with
+`services/api-gateway/` as its root — and every Dockerfile needs the
+repository root as context, because each image installs `libs/mfcommon` as a
+real package. What's needed is `contextDir` unset with `dockerfilePath`
+pointing into the subdirectory, which has no `oc new-app` flag. Hence the
+declared BuildConfigs.
+
 ### Rebuilding after a change
 
 ```bash
-bash scripts/openshift-build.sh api-gateway   # one service
+git push                                          # then:
+bash scripts/openshift-build.sh api-gateway       # rebuild from Git
 oc rollout restart deployment/api-gateway
 ```
+
+While iterating on something uncommitted, `--local` uploads your working tree
+instead:
+
+```bash
+bash scripts/openshift-build.sh --local api-gateway
+```
+
+That image corresponds to no commit, so it's for iteration only — the script
+warns when your tree is dirty.
+
+Optionally, register a GitHub webhook so a push rebuilds automatically; the
+instructions and the secret are at the bottom of
+[`openshift/build/build.yaml`](openshift/build/build.yaml). Nine services
+means nine webhooks, so an explicit `make oc-build` is a reasonable choice
+for a repo this size.
 
 ### Before production
 
