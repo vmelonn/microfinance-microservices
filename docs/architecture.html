@@ -1,0 +1,1230 @@
+<title>Microfinance Microservices — Architecture</title>
+<style>
+  /* ===================================================================
+     TOKENS — companion palette to microfinance-stack's reference doc.
+
+     Same family, different emphasis: the monolith doc leads with copper
+     (the binary ISO 8583 world). This one leads with petrol blue, because
+     its subject is the integration boundary. Copper is still here, but it
+     marks only the places where data is genuinely binary.
+
+     Light on bare :root. Dark redefines ONLY tokens, twice — under
+     prefers-color-scheme (guarded so an explicit light choice beats a dark
+     OS) and under [data-theme="dark"] so a toggle wins both ways. No
+     component declares a colour outside this block.
+     =================================================================== */
+  :root {
+    --ground:        #F1F4F6;
+    --surface:       #FFFFFF;
+    --surface-sunk:  #E6ECEF;
+    --rule:          #D0D9DF;
+    --rule-soft:     #E0E7EB;
+
+    --ink:           #14202A;
+    --ink-soft:      #52626F;
+    --ink-faint:     #7D8C99;
+
+    --accent:        #1F6F8B;   /* petrol — the SOAP / integration boundary */
+    --accent-sunk:   #E0EDF2;
+    --accent-2:      #B4531A;   /* copper — binary ISO 8583 */
+    --accent-2-sunk: #F6EAE1;
+
+    --ok:            #2E7D5B;
+    --warn:          #A8761C;
+    --crit:          #B03A3A;
+    --ok-sunk:       #E4F0EA;
+    --warn-sunk:     #F7EEDC;
+    --crit-sunk:     #F7E6E6;
+
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", "Menlo", "Consolas", monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+
+    --measure: 68ch;
+    --step--1: 0.812rem;
+    --step-0:  1rem;
+    --step-1:  1.18rem;
+    --step-2:  1.48rem;
+    --step-3:  1.95rem;
+    --step-4:  2.6rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:        #0E151B;
+      --surface:       #161F28;
+      --surface-sunk:  #1C2731;
+      --rule:          #2A3742;
+      --rule-soft:     #222E38;
+
+      --ink:           #E3E9EE;
+      --ink-soft:      #92A1AF;
+      --ink-faint:     #6A7A88;
+
+      --accent:        #58AEC9;
+      --accent-sunk:   #14252C;
+      --accent-2:      #E88B4D;
+      --accent-2-sunk: #2A1F17;
+
+      --ok:            #5CBF92;
+      --warn:          #D9A94E;
+      --crit:          #E07A7A;
+      --ok-sunk:       #15251E;
+      --warn-sunk:     #262015;
+      --crit-sunk:     #271A1A;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:        #0E151B;
+    --surface:       #161F28;
+    --surface-sunk:  #1C2731;
+    --rule:          #2A3742;
+    --rule-soft:     #222E38;
+
+    --ink:           #E3E9EE;
+    --ink-soft:      #92A1AF;
+    --ink-faint:     #6A7A88;
+
+    --accent:        #58AEC9;
+    --accent-sunk:   #14252C;
+    --accent-2:      #E88B4D;
+    --accent-2-sunk: #2A1F17;
+
+    --ok:            #5CBF92;
+    --warn:          #D9A94E;
+    --crit:          #E07A7A;
+    --ok-sunk:       #15251E;
+    --warn-sunk:     #262015;
+    --crit-sunk:     #271A1A;
+  }
+
+  /* =================================================================== */
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: var(--step-0);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(1rem, 4vw, 3rem);
+  }
+  @media (min-width: 1000px) {
+    .shell { grid-template-columns: 15rem minmax(0, 1fr); gap: 3.5rem; }
+  }
+
+  .masthead {
+    grid-column: 1 / -1;
+    padding: clamp(3rem, 8vw, 5.5rem) 0 2.5rem;
+    border-bottom: 2px solid var(--ink);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 1.1rem;
+  }
+  .masthead h1 {
+    font-family: var(--mono);
+    font-size: clamp(1.9rem, 5.5vw, var(--step-4));
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.08;
+    text-wrap: balance;
+    margin: 0 0 1rem;
+  }
+  .standfirst { max-width: var(--measure); font-size: var(--step-1); color: var(--ink-soft); margin: 0; }
+
+  .facts { display: flex; flex-wrap: wrap; gap: 0 2.5rem; margin-top: 2.25rem; font-family: var(--mono); font-size: var(--step--1); }
+  .fact { display: flex; flex-direction: column; gap: 0.15rem; }
+  .fact b { font-size: var(--step-2); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent); }
+  .fact span { color: var(--ink-faint); letter-spacing: 0.06em; text-transform: uppercase; }
+
+  nav.index { grid-column: 1; padding: 2.5rem 0; font-family: var(--mono); font-size: var(--step--1); }
+  @media (min-width: 1000px) {
+    nav.index { position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto; }
+  }
+  nav.index ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.55rem; }
+  nav.index a {
+    color: var(--ink-soft); text-decoration: none; display: flex; gap: 0.7rem;
+    border-left: 2px solid transparent; padding-left: 0.7rem; transition: color .15s, border-color .15s;
+  }
+  nav.index a:hover, nav.index a:focus-visible { color: var(--accent); border-left-color: var(--accent); }
+  nav.index a .n { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+  main { grid-column: 1; padding: 2.5rem 0 6rem; min-width: 0; }
+  @media (min-width: 1000px) { main { grid-column: 2; } }
+
+  section { padding-block: 2.75rem; border-top: 1px solid var(--rule-soft); }
+  section:first-of-type { border-top: 0; padding-top: 1rem; }
+
+  h2 { font-family: var(--mono); font-size: var(--step-3); font-weight: 600; letter-spacing: -0.015em; text-wrap: balance; margin: 0 0 0.4rem; scroll-margin-top: 1.5rem; }
+  h2 .num { color: var(--accent); font-size: var(--step-1); margin-right: 0.6rem; font-variant-numeric: tabular-nums; }
+  h3 { font-family: var(--mono); font-size: var(--step-1); font-weight: 600; margin: 2.5rem 0 0.5rem; text-wrap: balance; }
+  h4 { font-family: var(--mono); font-size: var(--step-0); font-weight: 600; color: var(--ink-soft); margin: 1.75rem 0 0.4rem; }
+  p, li { max-width: var(--measure); }
+  p { margin: 0 0 1rem; }
+  ul, ol.prose { padding-left: 1.2rem; margin: 0 0 1rem; }
+  li { margin-bottom: 0.4rem; }
+  a { color: var(--accent); }
+  strong { font-weight: 650; }
+
+  code { font-family: var(--mono); font-size: 0.88em; background: var(--surface-sunk); padding: 0.12em 0.36em; border-radius: 3px; }
+  .lede { font-size: var(--step-1); color: var(--ink-soft); max-width: var(--measure); margin-bottom: 1.75rem; }
+
+  .note { border-left: 3px solid var(--accent); background: var(--accent-sunk); padding: 1rem 1.25rem; margin: 1.5rem 0; max-width: var(--measure); }
+  .note.warn { border-left-color: var(--warn); background: var(--warn-sunk); }
+  .note.crit { border-left-color: var(--crit); background: var(--crit-sunk); }
+  .note.iso  { border-left-color: var(--accent-2); background: var(--accent-2-sunk); }
+  .note p:last-child { margin-bottom: 0; }
+  .note .tag { display: block; font-family: var(--mono); font-size: var(--step--1); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 0.4rem; }
+  .note.warn .tag { color: var(--warn); }
+  .note.crit .tag { color: var(--crit); }
+  .note.iso  .tag { color: var(--accent-2); }
+
+  .scroll { overflow-x: auto; margin: 1.5rem 0; border: 1px solid var(--rule); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: var(--step--1); }
+  th, td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th { font-family: var(--mono); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); background: var(--surface-sunk); white-space: nowrap; position: sticky; top: 0; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.mono, th.mono, .tnum { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td.mono { white-space: nowrap; }
+
+  .pill { display: inline-block; font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.04em; padding: 0.1rem 0.45rem; border-radius: 2px; white-space: nowrap; }
+  .pill.get  { background: var(--accent-sunk);   color: var(--accent); }
+  .pill.post { background: var(--accent-2-sunk); color: var(--accent-2); }
+  .pill.ok   { background: var(--ok-sunk);   color: var(--ok); }
+  .pill.warn { background: var(--warn-sunk); color: var(--warn); }
+  .pill.crit { background: var(--crit-sunk); color: var(--crit); }
+  .pill.soap { background: var(--accent-sunk); color: var(--accent); }
+
+  pre {
+    font-family: var(--mono); font-size: var(--step--1); line-height: 1.55;
+    background: var(--surface); border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+    padding: 1rem 1.1rem; overflow-x: auto; margin: 1.25rem 0;
+  }
+  pre.iso { border-left-color: var(--accent-2); }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  pre .c { color: var(--ink-faint); }
+  pre .k { color: var(--accent-2); }
+  pre .s { color: var(--accent); }
+
+  figure { margin: 2rem 0; }
+  figure .scroll { margin: 0; padding: 1.25rem; }
+  figcaption { font-family: var(--mono); font-size: var(--step--1); color: var(--ink-faint); margin-top: 0.6rem; max-width: var(--measure); }
+  svg { display: block; max-width: 100%; height: auto; }
+  svg text { font-family: var(--mono); fill: var(--ink); }
+  svg .lbl { font-size: 11px; }
+  svg .sm  { font-size: 9.5px; fill: var(--ink-soft); }
+  svg .tiny{ font-size: 8.5px; fill: var(--ink-faint); }
+  svg .box   { fill: var(--surface); stroke: var(--rule); stroke-width: 1; }
+  svg .box-a { fill: var(--accent-sunk); stroke: var(--accent); stroke-width: 1.2; }
+  svg .box-b { fill: var(--accent-2-sunk); stroke: var(--accent-2); stroke-width: 1.2; }
+  svg .box-x { fill: var(--crit-sunk); stroke: var(--crit); stroke-width: 1.2; }
+  svg .ln    { stroke: var(--ink-soft); stroke-width: 1; fill: none; }
+  svg .ln-a  { stroke: var(--accent); stroke-width: 2; fill: none; }
+  svg .ln-b  { stroke: var(--accent-2); stroke-width: 1.4; fill: none; }
+  svg .ln-x  { stroke: var(--crit); stroke-width: 1.2; fill: none; }
+  svg .ln-d  { stroke: var(--ink-faint); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+  svg .life  { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 4; }
+
+  /* Service cards — the structural device here, because the subject is a
+     set of independently deployable things rather than a stack of layers. */
+  .svcs { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin: 1.75rem 0; }
+  .svc { background: var(--surface); padding: 1rem 1.1rem; }
+  .svc.edge { background: var(--accent-sunk); }
+  .svc.crypto { background: var(--accent-2-sunk); }
+  .svc h4 { margin: 0 0 0.15rem; color: var(--ink); font-size: var(--step-0); }
+  .svc .port { font-family: var(--mono); font-size: 0.75rem; color: var(--ink-faint); }
+  .svc p { margin: 0.45rem 0 0; font-size: var(--step--1); color: var(--ink-soft); max-width: none; }
+  .svc .reps { display: inline-block; font-family: var(--mono); font-size: 0.72rem; color: var(--accent); margin-top: 0.5rem; }
+
+  .ep { border: 1px solid var(--rule); background: var(--surface); margin: 1.5rem 0; overflow: hidden; }
+  .ep > header { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; padding: 0.7rem 1rem; background: var(--surface-sunk); border-bottom: 1px solid var(--rule); font-family: var(--mono); font-size: var(--step--1); }
+  .ep > header .path { font-weight: 600; }
+  .ep > header .auth { margin-left: auto; color: var(--ink-faint); font-size: 0.78rem; }
+  .ep .body { padding: 0.9rem 1rem; }
+  .ep .body > p { margin: 0 0 0.75rem; font-size: var(--step--1); }
+  .ep pre { margin: 0.5rem 0; border-left-width: 2px; }
+
+  footer { grid-column: 1 / -1; border-top: 2px solid var(--ink); padding: 2rem 0 4rem; font-family: var(--mono); font-size: var(--step--1); color: var(--ink-faint); }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">microfinance-microservices · architecture reference</p>
+    <h1>REST outside.<br>SOAP at the boundary.<br>ISO 8583 on the wire.</h1>
+    <p class="standfirst">
+      The same eight layers as the monolith, split along ownership boundaries
+      into seven OpenShift services — plus everything a network forces you to
+      confront that a single process let you ignore.
+    </p>
+    <div class="facts">
+      <div class="fact"><b>7</b><span>services</span></div>
+      <div class="fact"><b>1</b><span>SOAP hop</span></div>
+      <div class="fact"><b>3</b><span>outcome states</span></div>
+      <div class="fact"><b>67</b><span>tests passing</span></div>
+    </div>
+  </header>
+
+  <nav class="index" aria-label="Contents">
+    <ol>
+      <li><a href="#overview"><span class="n">00</span> The wire path</a></li>
+      <li><a href="#services"><span class="n">01</span> Seven services</a></li>
+      <li><a href="#soap"><span class="n">02</span> The SOAP boundary</a></li>
+      <li><a href="#ace"><span class="n">03</span> IBM ACE</a></li>
+      <li><a href="#saga"><span class="n">04</span> The saga</a></li>
+      <li><a href="#unknown"><span class="n">05</span> The third outcome</a></li>
+      <li><a href="#cycles"><span class="n">06</span> Cycles</a></li>
+      <li><a href="#api"><span class="n">07</span> API reference</a></li>
+      <li><a href="#data"><span class="n">08</span> Data ownership</a></li>
+      <li><a href="#deploy"><span class="n">09</span> OpenShift</a></li>
+      <li><a href="#delta"><span class="n">10</span> What changed</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- ============================================ 00 -->
+    <section id="overview">
+      <h2><span class="num">00</span>The wire path</h2>
+      <p class="lede">
+        One request crosses three protocols. Each boundary exists because the
+        thing on the other side of it speaks a different language.
+      </p>
+
+      <figure>
+        <div class="scroll">
+          <svg viewBox="0 0 760 400" role="img" aria-label="End to end request path across all services">
+            <defs>
+              <marker id="m1" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 z" fill="var(--ink-soft)"/>
+              </marker>
+              <marker id="m2" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 z" fill="var(--accent)"/>
+              </marker>
+              <marker id="m3" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 z" fill="var(--accent-2)"/>
+              </marker>
+            </defs>
+
+            <text class="tiny" x="8" y="14">REST / JSON</text>
+            <text class="tiny" x="8" y="228" fill="var(--accent)">SOAP 1.1 / XML</text>
+            <text class="tiny" x="8" y="318" fill="var(--accent-2)">ISO 8583 / binary</text>
+
+            <!-- client -->
+            <rect class="box" x="300" y="24" width="150" height="30" rx="15"/>
+            <text class="lbl" x="340" y="44">mobile client</text>
+
+            <!-- gateway -->
+            <rect class="box-a" x="278" y="80" width="194" height="38"/>
+            <text class="lbl" x="298" y="97">api-gateway :8080</text>
+            <text class="tiny" x="298" y="111">JWT · idempotency · correlation ID</text>
+            <path class="ln" d="M375 54 L375 80" marker-end="url(#m1)"/>
+            <text class="tiny" x="384" y="72">the only Route</text>
+
+            <!-- row of services -->
+            <rect class="box" x="24" y="150" width="150" height="42"/>
+            <text class="lbl" x="40" y="168">auth-service</text>
+            <text class="tiny" x="40" y="183">:8081 · Postgres</text>
+
+            <rect class="box" x="196" y="150" width="176" height="42"/>
+            <text class="lbl" x="212" y="168">transaction-service</text>
+            <text class="tiny" x="212" y="183">:8082 · saga orchestrator</text>
+
+            <rect class="box" x="394" y="150" width="150" height="42"/>
+            <text class="lbl" x="410" y="168">risk-service</text>
+            <text class="tiny" x="410" y="183">:8083 · Redis</text>
+
+            <rect class="box" x="566" y="150" width="170" height="42"/>
+            <text class="lbl" x="582" y="168">ledger-service</text>
+            <text class="tiny" x="582" y="183">:8084 · Postgres</text>
+
+            <path class="ln" d="M330 118 L110 118 L110 150" marker-end="url(#m1)"/>
+            <path class="ln" d="M375 118 L375 150" marker-end="url(#m1)"/>
+            <path class="ln" d="M420 118 L660 118 L660 150" marker-end="url(#m1)"/>
+            <path class="ln" d="M340 192 L340 208 L460 208 L460 178 L390 178" marker-end="url(#m1)"/>
+            <path class="ln" d="M300 192 L300 214 L690 214 L690 196" marker-end="url(#m1)"/>
+
+            <!-- adapter -->
+            <rect class="box-b" x="240" y="240" width="230" height="42"/>
+            <text class="lbl" x="256" y="258">iso8583-adapter :8085</text>
+            <text class="tiny" x="256" y="273">PIN block · HSM · the crypto edge</text>
+            <path class="ln" d="M284 192 L284 240" marker-end="url(#m1)"/>
+
+            <!-- ACE -->
+            <rect class="box-a" x="240" y="304" width="230" height="42"/>
+            <text class="lbl" x="256" y="322">IBM ACE  /  ace-stub</text>
+            <text class="tiny" x="256" y="337">DFDL parse + serialize · STAN</text>
+            <path class="ln-a" d="M355 282 L355 304" marker-end="url(#m2)"/>
+            <text class="tiny" x="364" y="298" fill="var(--accent)">the one SOAP hop</text>
+
+            <!-- switch -->
+            <rect class="box-b" x="280" y="366" width="150" height="30" rx="15"/>
+            <text class="lbl" x="308" y="386">payment switch</text>
+            <path class="ln-b" d="M355 346 L355 366" marker-end="url(#m3)"/>
+            <text class="tiny" x="364" y="360" fill="var(--accent-2)">MLI + BCD</text>
+          </svg>
+        </div>
+        <figcaption>
+          Everything above the adapter is REST/JSON. Everything below ACE is
+          binary. The adapter is the only service that speaks SOAP, and the
+          only one holding key material — one pod, one NetworkPolicy, one
+          blast radius.
+        </figcaption>
+      </figure>
+
+      <div class="note">
+        <span class="tag">Why one SOAP hop, and only one</span>
+        <p>
+          SOAP is not used because it is pleasant. It is used because ACE is an
+          integration broker whose entire purpose is mediating between
+          protocols, and its native contract is a WSDL. Putting SOAP anywhere
+          else in the platform would add XML ceremony to calls that gain
+          nothing from it. Confining it to exactly the boundary where it earns
+          its place means swapping the implementation behind it is one
+          environment variable.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================================ 01 -->
+    <section id="services">
+      <h2><span class="num">01</span>Seven services</h2>
+      <p class="lede">
+        Split along ownership, not along layer count. The question at each
+        boundary was "who is allowed to change this without asking anyone".
+      </p>
+
+      <div class="svcs">
+        <div class="svc edge">
+          <h4>api-gateway</h4><span class="port">:8080 · the only Route</span>
+          <p>JWT verification, idempotency claims, correlation-ID minting, error translation. Concerns that apply to every request rather than any one use case.</p>
+          <span class="reps">2+ replicas · HPA</span>
+        </div>
+        <div class="svc">
+          <h4>auth-service</h4><span class="port">:8081 · own Postgres</span>
+          <p>Users, PBKDF2 passwords, HS256 token issuance and introspection. Owns the only table that knows who anyone is.</p>
+          <span class="reps">2 replicas</span>
+        </div>
+        <div class="svc">
+          <h4>transaction-service</h4><span class="port">:8082 · stateless</span>
+          <p>The saga orchestrator. Sequences risk, authorization, and posting, and owns every compensating action.</p>
+          <span class="reps">2 replicas · HPA</span>
+        </div>
+        <div class="svc">
+          <h4>risk-service</h4><span class="port">:8083 · Redis</span>
+          <p>Velocity, amount thresholds, entry-mode escalation. Separate because thresholds get retuned weekly and accounting rules do not.</p>
+          <span class="reps">2 replicas</span>
+        </div>
+        <div class="svc">
+          <h4>ledger-service</h4><span class="port">:8084 · own Postgres</span>
+          <p>Double-entry postings, idempotent on RRN. Knows nothing about purchases, risk, or solvency — it records balanced journal entries.</p>
+          <span class="reps">2 replicas</span>
+        </div>
+        <div class="svc crypto">
+          <h4>iso8583-adapter</h4><span class="port">:8085 · REST→SOAP</span>
+          <p>The protocol boundary and the crypto edge. The only service that speaks SOAP and the only one that can produce a PIN block.</p>
+          <span class="reps">1 replica — see below</span>
+        </div>
+        <div class="svc">
+          <h4>analytics-sync</h4><span class="port">CronJob · no port</span>
+          <p>Hourly incremental load from the ledger's API into ClickHouse. Runs to completion and exits with a status the scheduler alerts on.</p>
+          <span class="reps">hourly</span>
+        </div>
+        <div class="svc">
+          <h4>ace-stub</h4><span class="port">:8090 · test double</span>
+          <p>Serves the real WSDL and does real protocol mediation. Not deployed once ACE is entitled.</p>
+          <span class="reps">1 replica</span>
+        </div>
+        <div class="svc">
+          <h4>host-simulator</h4><span class="port">:9999 · test double</span>
+          <p>A fake switch answering 0200/0800/0400. Deleted entirely by the prod overlay.</p>
+          <span class="reps">dev + test only</span>
+        </div>
+      </div>
+
+      <div class="note crit">
+        <span class="tag">iso8583-adapter runs one replica, deliberately</span>
+        <p>
+          Each pod derives per-transaction PIN keys from its own persisted HSM
+          base key. Two replicas hold <em>different</em> keys, so a PIN block
+          encrypted by one cannot be decrypted by the other — and the failure
+          would look like sporadic <code>DE 39 = 55</code> declines rather than
+          anything pointing at replica count. Scaling this out needs a shared
+          KMS-backed key, not a higher number in the Deployment.
+        </p>
+      </div>
+
+      <h3>Two boundaries worth defending</h3>
+      <p>
+        <strong>The gateway is separate from the orchestrator</strong> because
+        merging them would drag saga machinery into the balance-inquiry path
+        that never uses it, and make the saga coordinator reachable from the
+        internet.
+      </p>
+      <p>
+        <strong>The adapter is separate from everything</strong> because it is
+        the only service holding key material and the only one speaking a
+        non-HTTP protocol downstream. Isolating it makes the PCI-relevant scope
+        one pod with one ServiceAccount, instead of smeared across the service
+        that also talks to risk, the ledger, and the gateway.
+      </p>
+
+      <h3>The shared library, and what stays out of it</h3>
+      <p>
+        <code>libs/mfcommon</code> holds things that must be
+        <strong>byte-identical</strong> across services: the ISO 8583 codec,
+        SOAP envelope handling, JWT primitives, PIN blocks, audit masking, the
+        resilient HTTP client. If the adapter and the stub disagree about BCD
+        padding by one nibble, every message corrupts.
+      </p>
+      <p>
+        Business rules deliberately stay out. Risk thresholds live in
+        risk-service; accounting rules live in ledger-service. A shared library
+        that accumulates business logic is how a microservice split quietly
+        becomes a distributed monolith — every service redeploying because one
+        service's rule changed.
+      </p>
+    </section>
+
+    <!-- ============================================ 02 -->
+    <section id="soap">
+      <h2><span class="num">02</span>The SOAP boundary</h2>
+      <p class="lede">
+        One WSDL, three operations, two implementations. The contract was
+        written first, and that is what makes the implementations swappable.
+      </p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Operation</th><th>MTI</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">authorize</td><td class="mono">0200 → 0210</td><td>Financial authorization. Blocks until the switch answers or the gateway's timeout expires.</td></tr>
+            <tr><td class="mono">reverse</td><td class="mono">0400 → 0410</td><td>Reversal advice. Idempotent at the switch, so safe — and required — to retry until acknowledged.</td></tr>
+            <tr><td class="mono">networkManagement</td><td class="mono">0800 → 0810</td><td>Sign-on, sign-off, echo. The echo is what the readiness probe calls.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>An authorization on the wire</h3>
+      <pre><code>POST /Iso8583Gateway
+Content-Type: text/xml; charset=utf-8
+SOAPAction: <span class="s">"urn:microfinance:iso8583:v1/authorizeRequest"</span>
+
+<span class="k">&lt;soapenv:Envelope</span> xmlns:soapenv=<span class="s">"...soap/envelope/"</span><span class="k">&gt;</span>
+  <span class="k">&lt;soapenv:Header&gt;</span>
+    <span class="k">&lt;wsse:Security</span> soapenv:mustUnderstand=<span class="s">"1"</span><span class="k">&gt;</span>…<span class="k">&lt;/wsse:Security&gt;</span>
+    <span class="k">&lt;iso:CorrelationId&gt;</span>cid-8f21a0c4<span class="k">&lt;/iso:CorrelationId&gt;</span>
+  <span class="k">&lt;/soapenv:Header&gt;</span>
+  <span class="k">&lt;soapenv:Body&gt;</span>
+    <span class="k">&lt;iso:authorizeRequest</span> xmlns:iso=<span class="s">"urn:microfinance:iso8583:v1"</span><span class="k">&gt;</span>
+      <span class="k">&lt;iso:pan&gt;</span>4532015112830366<span class="k">&lt;/iso:pan&gt;</span>
+      <span class="k">&lt;iso:processingCode&gt;</span>000000<span class="k">&lt;/iso:processingCode&gt;</span>
+      <span class="k">&lt;iso:amountMinor&gt;</span>000000005000<span class="k">&lt;/iso:amountMinor&gt;</span>
+      <span class="k">&lt;iso:entryMode&gt;</span>05<span class="k">&lt;/iso:entryMode&gt;</span>
+      <span class="k">&lt;iso:rrn&gt;</span>176073120042<span class="k">&lt;/iso:rrn&gt;</span>
+      <span class="k">&lt;iso:currencyCode&gt;</span>840<span class="k">&lt;/iso:currencyCode&gt;</span>
+      <span class="k">&lt;iso:pinBlockHex&gt;</span>8f2100ff9a0d1e7c<span class="k">&lt;/iso:pinBlockHex&gt;</span>
+      <span class="k">&lt;iso:ksn&gt;</span>0000000001<span class="k">&lt;/iso:ksn&gt;</span>
+    <span class="k">&lt;/iso:authorizeRequest&gt;</span>
+  <span class="k">&lt;/soapenv:Body&gt;</span>
+<span class="k">&lt;/soapenv:Envelope&gt;</span></code></pre>
+
+      <div class="note iso">
+        <span class="tag">Why the PIN block is hex</span>
+        <p>
+          DE 52 is eight bytes of ciphertext containing arbitrary byte values,
+          and several of those — <code>0x00–0x08</code>, <code>0x0B</code>,
+          <code>0x0C</code>, <code>0x0E–0x1F</code> — are <strong>illegal in
+          XML 1.0</strong>. Not awkward to escape: forbidden, with no escape
+          sequence that makes them legal.
+        </p>
+        <p>
+          The monolith passed DE 52 as latin-1 text, which works fine over a
+          raw socket. Doing the same across XML produces a document that fails
+          to parse roughly one time in twenty, depending on the ciphertext.
+          Hex-encoding at this boundary makes it always safe, and readable in a
+          trace. ACE's ESQL turns it back into bytes with
+          <code>CAST(… AS BLOB)</code> before the DFDL serializer writes the
+          field.
+        </p>
+      </div>
+
+      <h3>Three design choices in the codec</h3>
+      <p>
+        <strong>Hand-rolled, not zeep.</strong> zeep compiles the WSDL at
+        client construction, so process startup acquires a hard network
+        dependency on ACE being reachable — an ACE restart would cascade into
+        the adapter failing its readiness probe. The contract is three
+        operations; it needs to be obvious and to fail loudly, not to be
+        inferred.
+      </p>
+      <p>
+        <strong>Absent fields are omitted, never sent empty.</strong> In ISO
+        8583 an absent data element and a present-but-empty one are different
+        messages — the bitmap bit differs — and a real switch answers the
+        second with <code>DE 39 = 30</code>, format error.
+      </p>
+      <p>
+        <strong>Faults are checked before the status code.</strong> A SOAP
+        fault arrives as HTTP 500 with a well-formed body, and some stacks
+        return faults as HTTP 200. Branching on status alone either retries a
+        transaction the switch explicitly refused, or parses a fault as
+        success. And SOAP 1.1 fault children are <em>unqualified</em> — a
+        parser looking for them in the envelope namespace finds nothing and
+        reports a fault with no message.
+      </p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Fault category</th><th>Reached the switch?</th><th>Caller must</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">VALIDATION</td><td>no</td><td>Never retry — the identical request fails identically.</td></tr>
+            <tr><td class="mono">SWITCH_DOWN</td><td>no</td><td>Fail cleanly. No reversal needed; nothing was authorized.</td></tr>
+            <tr><td class="mono">SWITCH_TIMEOUT</td><td><strong>unknown</strong></td><td>Reverse, skip the ledger, flag for reconciliation.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================ 03 -->
+    <section id="ace">
+      <h2><span class="num">03</span>IBM ACE</h2>
+      <p class="lede">
+        The entitlement had not come through. Rather than leave the riskiest
+        integration untested until the licence landed, the contract was built
+        first and given two implementations.
+      </p>
+
+      <figure>
+        <div class="scroll">
+          <svg viewBox="0 0 720 230" role="img" aria-label="ACE message flow node graph">
+            <defs>
+              <marker id="m4" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 z" fill="var(--ink-soft)"/>
+              </marker>
+              <marker id="m5" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 z" fill="var(--crit)"/>
+              </marker>
+            </defs>
+
+            <rect class="box-a" x="10" y="30" width="96" height="40"/>
+            <text class="sm" x="26" y="48">SOAP Input</text>
+            <text class="tiny" x="26" y="62">from WSDL</text>
+
+            <rect class="box" x="130" y="30" width="110" height="40"/>
+            <text class="sm" x="146" y="48">Compute</text>
+            <text class="tiny" x="146" y="62">SoapToIso.esql</text>
+
+            <rect class="box-b" x="264" y="30" width="112" height="40"/>
+            <text class="sm" x="280" y="48">TCPIP Output</text>
+            <text class="tiny" x="280" y="62">MLI framed</text>
+
+            <rect class="box-b" x="400" y="30" width="112" height="40"/>
+            <text class="sm" x="416" y="48">TCPIP Receive</text>
+            <text class="tiny" x="416" y="62">timeout 10s</text>
+
+            <rect class="box" x="536" y="30" width="112" height="40"/>
+            <text class="sm" x="552" y="48">ResetContent</text>
+            <text class="tiny" x="552" y="62">DFDL parse</text>
+
+            <rect class="box" x="264" y="120" width="112" height="40"/>
+            <text class="sm" x="280" y="138">Compute</text>
+            <text class="tiny" x="280" y="152">IsoToSoap.esql</text>
+
+            <rect class="box-a" x="130" y="120" width="96" height="40"/>
+            <text class="sm" x="150" y="138">SOAP Reply</text>
+
+            <rect class="box-x" x="452" y="170" width="196" height="42"/>
+            <text class="sm" x="468" y="188" fill="var(--crit)">HandleSwitchTimeout</text>
+            <text class="tiny" x="468" y="202">0400 reversal + SWITCH_TIMEOUT fault</text>
+
+            <path class="ln" d="M106 50 L126 50" marker-end="url(#m4)"/>
+            <path class="ln" d="M240 50 L260 50" marker-end="url(#m4)"/>
+            <path class="ln" d="M376 50 L396 50" marker-end="url(#m4)"/>
+            <path class="ln" d="M512 50 L532 50" marker-end="url(#m4)"/>
+            <path class="ln" d="M592 70 L592 100 L376 100 L330 100 L330 116" marker-end="url(#m4)"/>
+            <path class="ln" d="M260 140 L230 140" marker-end="url(#m4)"/>
+            <path class="ln-x" d="M456 70 L456 191 L448 191" marker-end="url(#m5)"/>
+            <text class="tiny" x="416" y="150" fill="var(--crit)">timeout</text>
+            <path class="ln-x" d="M452 200 L200 200 L200 164" marker-end="url(#m5)"/>
+          </svg>
+        </div>
+        <figcaption>
+          The two Compute modules and the timeout handler are written. Wiring
+          the graph is Toolkit work — a <code>.msgflow</code> is Eclipse EMF
+          XMI with internal identifiers, and hand-authoring one produces a file
+          that either fails to open or opens subtly wrong.
+        </figcaption>
+      </figure>
+
+      <h3>Honest status</h3>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Artifact</th><th>State</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">wsdl/Iso8583Gateway.wsdl</td><td><span class="pill ok">in use</span> ace-stub serves this exact file; the whole test suite runs against it.</td></tr>
+            <tr><td class="mono">dfdl/ISO8583.xsd</td><td><span class="pill warn">written, never executed</span> Cross-checked against the Python codec by hand and by test.</td></tr>
+            <tr><td class="mono">esql/SoapToIso.esql</td><td><span class="pill warn">written, never compiled</span></td></tr>
+            <tr><td class="mono">esql/IsoToSoap.esql</td><td><span class="pill warn">written, never compiled</span></td></tr>
+            <tr><td class="mono">Iso8583Gateway.msgflow</td><td><span class="pill crit">specified, not authored</span> Assemble in the Toolkit.</td></tr>
+            <tr><td class="mono">Dockerfile</td><td><span class="pill crit">never built</span> Base image needs an entitlement key.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>ace-stub is a stand-in, not a mock</h3>
+      <p>
+        A mock returns canned responses. <code>ace-stub</code> genuinely maps
+        the SOAP request onto an ISO 8583 field dictionary, builds real
+        BCD-packed binary with a real bitmap, opens a real TCP socket, frames
+        with a real MLI, correlates the response by STAN, and parses the real
+        binary answer back. The bytes on the wire are the bytes ACE will
+        produce.
+      </p>
+      <p>
+        That is what makes the integration tests survive the swap: they assert
+        on the WSDL contract, not on either implementation.
+      </p>
+
+      <pre><code><span class="c"># the entire migration, once entitled</span>
+ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
+
+      <h3>The conformance obligation</h3>
+      <p>
+        <code>ISO8583.xsd</code> and <code>mfcommon/iso8583/parser.py</code>
+        are two independent implementations of the same binary format. They
+        <em>will</em> drift — not might — unless something forces them
+        together. <code>tests/e2e/test_dfdl_conformance.py</code> is that
+        forcing function: 23 assertions pinning the byte-level properties the
+        DFDL schema declares.
+      </p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Pinned property</th><th>What breaks without it</th></tr></thead>
+          <tbody>
+            <tr><td>MTI is 2 bytes BCD</td><td>Every message misaligns from byte 2.</td></tr>
+            <tr><td>Bit N ⇄ DE N</td><td>Off-by-one shifts every field in the message.</td></tr>
+            <tr><td>Odd numerics get a <em>trailing</em> <code>F</code></td><td>Vendor-specific. Some processors pad leading; a mismatch shifts by one nibble.</td></tr>
+            <tr><td>LLVAR length counts <strong>digits</strong></td><td>The most common ISO 8583 parsing bug. 16 digits, <code>LL=16</code>, 8 bytes.</td></tr>
+            <tr><td>DE 37 is text, not BCD</td><td>12 characters in 12 bytes, not 6.</td></tr>
+            <tr><td>DE 52 and 64 are never trimmed</td><td>Ciphertext ending in a whitespace byte loses key material.</td></tr>
+            <tr><td>MLI is 2 bytes big-endian</td><td>Framing desynchronises and the connection dies.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        What it does <em>not</em> prove: that the DFDL schema parses. That
+        needs an ACE runtime. The first deployment is still the first real test
+        of that file, and the README says so.
+      </p>
+    </section>
+
+    <!-- ============================================ 04 -->
+    <section id="saga">
+      <h2><span class="num">04</span>The saga</h2>
+      <p class="lede">
+        In the monolith, an exception unwound everything. Across four
+        databases, there is nothing to unwind with — so every step carries a
+        named compensation.
+      </p>
+
+      <p>
+        The order is chosen, not arbitrary: cheapest and most reversible first,
+        so that everything undoable happens before the one thing that is not.
+      </p>
+
+      <figure>
+        <div class="scroll">
+          <svg viewBox="0 0 720 300" role="img" aria-label="Saga steps with compensations">
+            <defs>
+              <marker id="m6" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 z" fill="var(--ink-soft)"/>
+              </marker>
+              <marker id="m7" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 z" fill="var(--crit)"/>
+              </marker>
+            </defs>
+
+            <rect class="box" x="14" y="60" width="140" height="46"/>
+            <text class="sm" x="30" y="80">1 · resolve + authz</text>
+            <text class="tiny" x="30" y="96">read only</text>
+
+            <rect class="box" x="184" y="60" width="140" height="46"/>
+            <text class="sm" x="200" y="80">2 · risk evaluate</text>
+            <text class="tiny" x="200" y="96">records an attempt</text>
+
+            <rect class="box-b" x="354" y="60" width="160" height="46"/>
+            <text class="sm" x="370" y="80">3 · authorize</text>
+            <text class="tiny" x="370" y="96">point of no return</text>
+
+            <rect class="box" x="544" y="60" width="160" height="46"/>
+            <text class="sm" x="560" y="80">4 · ledger posting</text>
+            <text class="tiny" x="560" y="96">idempotent on RRN</text>
+
+            <path class="ln" d="M154 83 L180 83" marker-end="url(#m6)"/>
+            <path class="ln" d="M324 83 L350 83" marker-end="url(#m6)"/>
+            <path class="ln" d="M514 83 L540 83" marker-end="url(#m6)"/>
+
+            <text class="tiny" x="14" y="140">COMPENSATION</text>
+            <path class="ln-d" d="M14 150 L704 150"/>
+
+            <text class="sm" x="30" y="176">none needed</text>
+            <text class="tiny" x="30" y="190">nothing happened</text>
+
+            <text class="sm" x="200" y="176">none needed</text>
+            <text class="tiny" x="200" y="190">no money moved</text>
+
+            <text class="sm" x="370" y="176" fill="var(--crit)">0400 reversal</text>
+            <text class="tiny" x="370" y="190">outcome unknown</text>
+
+            <text class="sm" x="560" y="176" fill="var(--crit)">reverse, then</text>
+            <text class="tiny" x="560" y="190">reconciliation exception</text>
+
+            <rect class="box-x" x="354" y="216" width="350" height="58"/>
+            <text class="sm" x="370" y="236" fill="var(--crit)">THE HARD CASE — step 3 succeeded, step 4 failed</text>
+            <text class="tiny" x="370" y="252">Switch approved. Cardholder debited. Our books show nothing.</text>
+            <text class="tiny" x="370" y="266">No clean unwind exists. Reverse; if that fails too, flag a human.</text>
+            <path class="ln-x" d="M624 106 L624 130 L690 130 L690 212" marker-end="url(#m7)"/>
+          </svg>
+        </div>
+        <figcaption>
+          Retry policy follows directly from this diagram. Step 1 retries
+          freely — it is a lookup. Step 2 never retries, because evaluating
+          records an attempt and a retry inflates the caller's own velocity
+          toward a decline. Step 3 never retries, because a retry is a second
+          real authorization. Step 4 retries three times, because
+          <code>PRIMARY KEY (rrn)</code> makes it safe.
+        </figcaption>
+      </figure>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Step fails</th><th>Retries</th><th>Compensation</th></tr></thead>
+          <tbody>
+            <tr><td>risk evaluate — timeout or 5xx</td><td class="mono">0</td><td><strong>Fail closed.</strong> A risk service that is down must not become one that approves everything.</td></tr>
+            <tr><td>authorize — <code>DE 39 ≠ 00</code></td><td class="mono">0</td><td>Decline. Nothing downstream runs.</td></tr>
+            <tr><td>authorize — timeout</td><td class="mono">0</td><td>Reversal issued; outcome <code>unknown</code>; no ledger posting.</td></tr>
+            <tr><td>ledger — duplicate RRN</td><td>—</td><td>Not an error. <code>already_recorded</code>, return the original result.</td></tr>
+            <tr><td>ledger — 5xx after an approval</td><td class="mono">3</td><td>Compensating <code>0400</code>. If that also fails: <code>requires_reconciliation</code> and a human.</td></tr>
+            <tr><td>registration — account creation fails</td><td class="mono">0</td><td>Delete the user. Otherwise a failed signup leaves someone who can log in, owns nothing, and whose CNIC blocks a retry.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================ 05 -->
+    <section id="unknown">
+      <h2><span class="num">05</span>The third outcome</h2>
+      <p class="lede">
+        The single most important difference between this platform and the
+        monolith it came from.
+      </p>
+
+      <p>
+        A function call either returns or raises. A network call has a third
+        possibility: it <strong>succeeded, and the response was lost</strong>.
+        The switch approved, the cardholder is debited, and the caller has no
+        way to know.
+      </p>
+
+      <div class="note crit">
+        <span class="tag">A timeout is not a decline</span>
+        <p>
+          Reporting "declined" for a lost response is a lie that quietly takes
+          someone's money. Reporting "approved" invents a transaction that may
+          never have happened. Neither is acceptable, so the platform carries a
+          third value all the way to the client.
+        </p>
+      </div>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>outcome</th><th>Ledger written</th><th>Reversal</th><th>Client sees</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill ok">approved</span></td><td>yes</td><td>no</td><td>Success, with an RRN and an authorization ID.</td></tr>
+            <tr><td><span class="pill crit">declined</span></td><td>no</td><td>no</td><td>A specific reason, decoded from DE 39.</td></tr>
+            <tr><td><span class="pill warn">unknown</span></td><td><strong>no</strong></td><td>yes</td><td><code>requires_reconciliation: true</code>. Do not blindly retry.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        The reasoning behind "no ledger write" is asymmetric, and worth stating
+        plainly: a posting for a transaction that never happened invents money
+        and nothing will ever catch it. A <em>missing</em> posting for one that
+        did happen is caught the next day, when reconciliation compares the
+        ledger against the switch's own settlement file and finds an RRN in
+        one and not the other. One error is silent and permanent; the other is
+        loud and temporary.
+      </p>
+
+      <pre><code><span class="c"># transaction-service, step 3</span>
+<span class="k">if</span> auth[<span class="s">"outcome"</span>] == <span class="s">"unknown"</span>:
+    log.error(<span class="s">f"UNKNOWN outcome rrn={rrn} -- no ledger posting"</span>)
+    <span class="k">return</span> TransactionResponse(
+        status=<span class="s">"unknown"</span>,
+        rrn=rrn,
+        requires_reconciliation=<span class="k">True</span>,
+    )</code></pre>
+    </section>
+
+    <!-- ============================================ 06 -->
+    <section id="cycles">
+      <h2><span class="num">06</span>Cycles</h2>
+
+      <h3>Correlation IDs</h3>
+      <p>
+        In the monolith one purchase was one call stack, and a traceback told
+        you everything. Here it is seven log streams on seven pods. The gateway
+        mints a correlation ID, every service propagates it unchanged — through
+        the SOAP hop, via a header inside the envelope — and every log line
+        carries it.
+      </p>
+      <p>
+        Two identifiers, deliberately distinct: the <strong>correlation ID</strong>
+        exists for requests that never become transactions (a declined risk
+        check, a 401) and lives as long as the logs; the <strong>RRN</strong>
+        exists for money that moved and must be findable in seven years.
+      </p>
+
+      <h3>Cross-replica idempotency</h3>
+      <p>
+        The claim is taken at the gateway, before any downstream work, via an
+        atomic Redis <code>SET NX</code>. Claiming inside the orchestrator
+        instead would still let two concurrent duplicates both pass risk
+        evaluation before either claimed — and since evaluating records an
+        attempt, the retry would count twice against the velocity window.
+      </p>
+      <p>
+        <code>docker-compose</code> runs <strong>two</strong> gateway replicas
+        specifically so this is observable. A single-replica compose file hides
+        the entire class of bug the Redis layer exists to prevent.
+      </p>
+
+      <h3>Velocity across pods</h3>
+      <p>
+        A Redis sorted set per card: <code>ZADD</code> records the attempt,
+        <code>ZREMRANGEBYSCORE</code> prunes the window,
+        <code>ZCARD</code> counts. With per-pod memory instead, six attempts
+        spread across three replicas look like two attempts each and every one
+        is approved — the fraud control silently stops working while nothing
+        appears wrong.
+      </p>
+
+      <h3>Analytics sync</h3>
+      <p>
+        Hourly, watermark-driven, and it reads through
+        <code>/internal/ledger/export</code> rather than querying
+        ledger-service's Postgres directly. Reaching into another service's
+        tables is faster and is the single most common way a microservice
+        architecture collapses back into a shared schema — the moment this job
+        selects from <code>ledger_entries</code>, that table can never change
+        without breaking a job its owner does not know exists.
+      </p>
+
+      <div class="note warn">
+        <span class="tag">Why the watermark is a correctness requirement</span>
+        <p>
+          ClickHouse's <code>ReplacingMergeTree</code> deduplicates
+          <em>eventually</em>, at background merge time, so re-loading a row is
+          safe for the fact table. But the <code>mv_daily_volume</code>
+          materialized view fires on <code>INSERT</code>, <em>before</em> that
+          deduplication — so a re-load double-counts in the aggregate even
+          though the fact table self-corrects. Advancing the watermark only
+          after a confirmed batch is what keeps the aggregates honest, not
+          merely what makes the sync fast.
+        </p>
+        <p>
+          The CronJob also sets <code>concurrencyPolicy: Forbid</code> for the
+          same reason: two overlapping runs would read the same watermark and
+          double-count everything between them.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================================ 07 -->
+    <section id="api">
+      <h2><span class="num">07</span>API reference</h2>
+      <p class="lede">
+        Public endpoints are on api-gateway. Everything under
+        <code>/internal</code> has no Route and is reachable only from inside
+        the namespace, enforced by NetworkPolicy.
+      </p>
+
+      <h3>Public — api-gateway :8080</h3>
+
+      <div class="ep">
+        <header><span class="pill post">POST</span><span class="path">/users/register</span><span class="auth">public</span></header>
+        <div class="body">
+          <p>A two-service saga: auth-service creates the user, ledger-service creates the account and card. If the second fails, the first is compensated by deletion.</p>
+          <pre><code>{ <span class="s">"full_name"</span>: <span class="s">"Ayesha Khan"</span>, <span class="s">"cnic"</span>: <span class="s">"3520212345678"</span>,
+  <span class="s">"bind_card_number"</span>: <span class="s">"4532015112830366"</span>, <span class="s">"password"</span>: <span class="s">"min-8-chars"</span> }
+
+<span class="c">→ 200</span> { <span class="s">"user_id"</span>: <span class="s">"usr_a1b2c3d4e5f6"</span>, <span class="s">"account_id"</span>: <span class="s">"acc_9876543210ab"</span> }
+<span class="c">→ 409</span> CNIC or card already registered</code></pre>
+        </div>
+      </div>
+
+      <div class="ep">
+        <header><span class="pill post">POST</span><span class="path">/auth/login</span><span class="auth">public</span></header>
+        <div class="body">
+          <pre><code>{ <span class="s">"cnic"</span>: <span class="s">"3520212345678"</span>, <span class="s">"password"</span>: <span class="s">"..."</span> }
+<span class="c">→ 200</span> { <span class="s">"access_token"</span>: <span class="s">"eyJ..."</span>, <span class="s">"expires_in_seconds"</span>: <span class="k">3600</span> }
+<span class="c">→ 401</span> identical error for unknown user and wrong password</code></pre>
+        </div>
+      </div>
+
+      <div class="ep">
+        <header><span class="pill post">POST</span><span class="path">/transactions/purchase</span><span class="auth">Bearer + ownership</span></header>
+        <div class="body">
+          <p>Runs the full saga. <code>amount</code> is decimal currency here and becomes integer cents exactly once, at this boundary — everything below is integers.</p>
+          <pre><code>{ <span class="s">"amount"</span>: <span class="k">25.50</span>, <span class="s">"card_number"</span>: <span class="s">"4532015112830366"</span>,
+  <span class="s">"pin"</span>: <span class="s">"1234"</span>, <span class="s">"idempotency_key"</span>: <span class="s">"client-uuid"</span>,
+  <span class="s">"entry_mode"</span>: <span class="s">"05"</span> }
+
+<span class="c">→ 200</span> { <span class="s">"status"</span>: <span class="s">"approved"</span>,
+        <span class="s">"reason"</span>: <span class="s">"Approved / completed successfully"</span>,
+        <span class="s">"rrn"</span>: <span class="s">"176073120042"</span>, <span class="s">"stan"</span>: <span class="s">"000123"</span>,
+        <span class="s">"authorization_id"</span>: <span class="s">"A18008"</span>,
+        <span class="s">"ledger_status"</span>: <span class="s">"recorded"</span>,
+        <span class="s">"requires_reconciliation"</span>: <span class="k">false</span> }</code></pre>
+          <p><span class="pill crit">400</span> key reused with a different body · <span class="pill warn">409</span> claim held by another in-flight request · <span class="pill crit">403</span> not your card · <span class="pill crit">404</span> card not registered · <span class="pill crit">503</span> risk unavailable, refused</p>
+        </div>
+      </div>
+
+      <div class="ep">
+        <header><span class="pill post">POST</span><span class="path">/transactions/transfer</span><span class="auth">Bearer + ownership</span></header>
+        <div class="body">
+          <p>Processing code <code>400000</code>; the recipient's wallet ID travels in DE 103. Self-transfers are rejected — the ledger would still balance, but the row is pure noise.</p>
+        </div>
+      </div>
+
+      <div class="ep">
+        <header><span class="pill get">GET</span><span class="path">/accounts/{identifier}/balance</span><span class="auth">Bearer + ownership</span></header>
+        <div class="body">
+          <p>Accepts a card number or an account ID. Ownership is checked, not just authentication — otherwise any valid token could read any balance by guessing an ID.</p>
+        </div>
+      </div>
+
+      <h3>Internal</h3>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Service</th><th>Endpoint</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">auth</td><td class="mono">POST /internal/auth/users</td><td>Not idempotent — a retry creates a second user.</td></tr>
+            <tr><td class="mono">auth</td><td class="mono">POST /internal/auth/login</td><td>Issues the HS256 token.</td></tr>
+            <tr><td class="mono">auth</td><td class="mono">DELETE /internal/auth/users/{id}</td><td>The registration saga's compensation. Idempotent by design.</td></tr>
+            <tr><td class="mono">auth</td><td class="mono">POST /internal/auth/introspect</td><td>Verifies <em>and</em> confirms the user still exists — the part local verification cannot do.</td></tr>
+            <tr><td class="mono">risk</td><td class="mono">POST /internal/risk/evaluate</td><td><strong>Has a side effect.</strong> Records the attempt, so it must never be retried.</td></tr>
+            <tr><td class="mono">risk</td><td class="mono">GET /internal/risk/config</td><td>Current thresholds, so a decline can be explained without shelling into a pod.</td></tr>
+            <tr><td class="mono">ledger</td><td class="mono">POST /internal/ledger/postings</td><td>Idempotent on RRN. Safe to retry from anywhere.</td></tr>
+            <tr><td class="mono">ledger</td><td class="mono">POST /internal/ledger/resolve</td><td>Card or account ID → account. Pure lookup.</td></tr>
+            <tr><td class="mono">ledger</td><td class="mono">GET /internal/ledger/export</td><td>Feeds analytics-sync. A contract, unlike the table behind it.</td></tr>
+            <tr><td class="mono">ledger</td><td class="mono">GET /internal/ledger/integrity</td><td>Total debits = total credits. A CronJob asserts this every 30 minutes.</td></tr>
+            <tr><td class="mono">adapter</td><td class="mono">POST /internal/iso8583/authorize</td><td>Where REST becomes SOAP.</td></tr>
+            <tr><td class="mono">adapter</td><td class="mono">POST /internal/iso8583/reverse</td><td>Idempotent at the switch.</td></tr>
+            <tr><td class="mono">ace-stub</td><td class="mono"><span class="pill soap">SOAP</span> POST /Iso8583Gateway</td><td>Three operations. <code>?wsdl</code> serves the contract.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Probes — every service</h3>
+      <p>
+        <code>/health</code> is <strong>liveness</strong>: is this process
+        responsive? It deliberately does <em>not</em> check downstreams — a
+        liveness probe that fails during a dependency outage makes OpenShift
+        restart healthy pods, losing in-flight work and fixing nothing.
+      </p>
+      <p>
+        <code>/ready</code> is <strong>readiness</strong>: should this pod
+        receive traffic? This one does check dependencies. The adapter's
+        readiness runs a genuine echo test through ACE and out to the switch,
+        because a pod that answers while the switch is unreachable gets traffic
+        it can only fail.
+      </p>
+    </section>
+
+    <!-- ============================================ 08 -->
+    <section id="data">
+      <h2><span class="num">08</span>Data ownership</h2>
+      <p class="lede">
+        Four stores, three owners. The boundaries are about who may migrate a
+        schema, not about how many processes are running.
+      </p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Store</th><th>Owner</th><th>Holds</th><th>If lost</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">Postgres · auth</td><td>auth-service</td><td><code>users</code></td><td>Unrecoverable. Real backups required.</td></tr>
+            <tr><td class="mono">Postgres · ledger</td><td>ledger-service</td><td><code>accounts</code>, <code>cards</code>, <code>transactions</code>, <code>ledger_entries</code></td><td>Unrecoverable. This is the money.</td></tr>
+            <tr><td class="mono">Redis</td><td>gateway + risk</td><td>Idempotency claims, velocity windows</td><td>Tolerable. Both are TTL'd derived state; the ledger's PRIMARY KEY is the real backstop.</td></tr>
+            <tr><td class="mono">ClickHouse</td><td>analytics-sync</td><td><code>fact_transactions</code>, rollups</td><td>Rebuildable — rerun the sync with an empty watermark.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <span class="tag">No foreign key crosses a service boundary</span>
+        <p>
+          <code>accounts.user_id</code> references a user that lives in
+          auth-service's database, and there is deliberately no FK behind it.
+          Referential integrity across a service boundary cannot be enforced by
+          a database; it is enforced by the fact that only auth-service creates
+          users. Adding a cross-database FK is how a microservice split ends up
+          with a shared schema and two services that can no longer deploy
+          independently.
+        </p>
+      </div>
+
+      <h3>The one guarantee</h3>
+      <p>
+        Everything upstream — the gateway's idempotency claim, the saga's retry
+        policy, the reversal on timeout — is best-effort. The guarantee that
+        cannot be wrong is <code>PRIMARY KEY (rrn)</code> on
+        <code>transactions</code>: one atomic statement, enforced by the
+        database, holding however many replicas race. Ten threads released
+        simultaneously on one RRN produce exactly one posting and nine
+        <code>already_recorded</code> responses.
+      </p>
+    </section>
+
+    <!-- ============================================ 09 -->
+    <section id="deploy">
+      <h2><span class="num">09</span>OpenShift</h2>
+
+      <pre><code>make build                              <span class="c"># nine images</span>
+oc apply -k openshift/overlays/dev
+
+<span class="c"># or locally: nine services, three datastores, one command</span>
+docker compose up --build
+make smoke</code></pre>
+
+      <h3>Network policy</h3>
+      <p>
+        Default deny, then specific paths re-admitted. Without it every pod can
+        reach every other pod, and isolating the adapter as the sole holder of
+        key material means nothing — any compromised pod could simply call it.
+      </p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>From</th><th>May reach</th></tr></thead>
+          <tbody>
+            <tr><td>OpenShift router</td><td>api-gateway only</td></tr>
+            <tr><td>api-gateway</td><td>auth, transaction, ledger — <em>not</em> risk or the adapter</td></tr>
+            <tr><td>transaction-service</td><td>risk, ledger, adapter</td></tr>
+            <tr><td>iso8583-adapter</td><td>ace-stub / ACE only</td></tr>
+            <tr><td>ace-stub / ACE</td><td>the switch only</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The gateway deliberately cannot reach risk-service or the adapter
+        directly. Those are the orchestrator's to call, and letting the edge
+        reach them would route around the saga.
+      </p>
+
+      <h3>Arbitrary UIDs</h3>
+      <p>
+        OpenShift assigns a random UID at runtime, not the image's declared
+        user. Every Dockerfile installs packages system-wide rather than into a
+        named user's home and runs
+        <code>chgrp -R 0 /app &amp;&amp; chmod -R g=u /app</code>, because
+        whatever UID gets assigned is always a member of GID 0.
+      </p>
+      <div class="note warn">
+        <span class="tag">It does not look like a permission error</span>
+        <p>
+          Getting this wrong surfaces as <code>executable file not found in
+          $PATH</code>. The file genuinely exists; the assigned UID just cannot
+          read the directory it was installed into — and the error sends you
+          looking in entirely the wrong place.
+        </p>
+      </div>
+
+      <h3>Before production</h3>
+      <ol class="prose">
+        <li><strong>Real secrets.</strong> The base ships a <em>placeholder</em> Secret so a fresh cluster applies cleanly. Applying it as-is deploys a published JWT signing key.</li>
+        <li><strong>Repoint <code>SWITCH_HOST</code>.</strong> The prod overlay deletes host-simulator; if the address still names it, every transaction fails.</li>
+        <li><strong>Pin image tags.</strong> <code>latest</code> means a pod restart can pick up a different build than its neighbours.</li>
+        <li><strong>Back up <code>HSM_MASTER_KEY_HEX</code> somewhere that is not this cluster.</strong> Losing it makes every persisted PIN block permanently undecryptable.</li>
+      </ol>
+    </section>
+
+    <!-- ============================================ 10 -->
+    <section id="delta">
+      <h2><span class="num">10</span>What changed, and what it cost</h2>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Monolith</th><th>Here</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td>One function call</td><td>Seven HTTP hops</td><td>Independent deploys and independent scaling.</td></tr>
+            <tr><td>Exception unwinds everything</td><td>Saga with explicit compensation</td><td>No distributed transaction exists.</td></tr>
+            <tr><td>One SQLite file</td><td>Postgres per service</td><td>Independent schema ownership.</td></tr>
+            <tr><td>One traceback</td><td>Correlation IDs through every hop</td><td>One request is now seven log streams.</td></tr>
+            <tr><td>Direct TCP from the app</td><td>SOAP → ACE → ISO 8583</td><td>Protocol mediation belongs in a broker.</td></tr>
+            <tr><td>In-process risk state</td><td>Redis</td><td>Per-pod state makes velocity rules bypassable.</td></tr>
+            <tr><td>Plain function call</td><td>Timeouts, selective retries, breakers</td><td>A call can now succeed <em>and</em> be lost.</td></tr>
+            <tr><td>approved / declined</td><td>approved / declined / <strong>unknown</strong></td><td>The response can go missing.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Honest costs</h3>
+      <p>
+        The decomposition is not free, and the main price is the
+        <code>unknown</code> state. In the monolith it could not occur — a
+        function call either returned or raised. Here it is a real outcome that
+        needs a reversal, a reconciliation queue, and eventually a human.
+      </p>
+      <p>
+        Second: latency. Seven hops instead of seven function calls. Third:
+        seven deployables, nine images, and a NetworkPolicy graph to keep
+        correct. Fourth: local development now needs a container runtime
+        instead of <code>uvicorn</code>.
+      </p>
+      <p>
+        What it buys is genuine: risk thresholds retune without redeploying the
+        ledger, the gateway scales independently of the crypto edge, and the
+        PCI-relevant surface is one pod instead of one process.
+      </p>
+
+      <h3>Known gaps</h3>
+      <ul>
+        <li><strong>No MAC</strong> on outbound messages. DE 64/128 are modelled and masked but never generated.</li>
+        <li><strong>DE 90 placeholders</strong> in reversals — the simulator only needs MTI and STAN.</li>
+        <li><strong>No RBAC.</strong> Any authenticated user is equivalent to any other.</li>
+        <li><strong><code>MockHSM</code> is XOR</strong>, not a real HSM. Correct interface, no tamper resistance.</li>
+        <li><strong>Plaintext PIN crosses one internal hop</strong> — gateway to adapter. Mitigated by NetworkPolicy; a real PCI environment wants mTLS.</li>
+        <li><strong>RRN collision is possible</strong> — 1 in 100 within the same second. The PRIMARY KEY turns it into a rejected duplicate rather than corrupted money, but the format should change before real volume.</li>
+        <li><strong>ACE artifacts are unverified.</strong> Written, never compiled or run.</li>
+      </ul>
+    </section>
+
+  </main>
+
+  <footer>
+    microfinance-microservices · architecture reference<br>
+    Companion document: microfinance-stack — the monolith this was decomposed from.
+  </footer>
+
+</div>
