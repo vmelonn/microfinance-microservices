@@ -1,0 +1,118 @@
+---
+# ace-stub
+# The ACE stand-in. Replace this Deployment with the real ACE one and
+    # repoint iso8583-adapter's ISO8583_SOAP_ENDPOINT -- nothing else changes.
+    # ONE REPLICA: it holds a single stateful TCP connection to the switch
+    # and allocates STANs from a per-process counter.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ace-stub
+  labels:
+    app.kubernetes.io/name: ace-stub
+    app.kubernetes.io/part-of: microfinance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ace-stub
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0    # never drop below the desired count during a roll
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ace-stub
+        app.kubernetes.io/part-of: microfinance
+    spec:
+      serviceAccountName: microfinance
+      # OpenShift's restricted-v2 SCC assigns a random UID and drops all
+      # capabilities. Declaring that here rather than relying on the default
+      # means the manifest states its own requirements, and a cluster with a
+      # different default SCC still gets the intended posture.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: ace-stub
+          image: ace-stub:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8090
+              name: http
+          envFrom:
+            - configMapRef: {name: microfinance-config}
+            - secretRef: {name: microfinance-secrets}
+          env:
+            - name: SWITCH_HOST
+              value: "host-simulator"
+            - name: SWITCH_PORT
+              value: "9999"
+            - name: WSDL_PATH
+              value: "/app/wsdl/Iso8583Gateway.wsdl"
+          # Requests are what the scheduler packs on; limits are the hard cap.
+          # CPU limit is deliberately omitted: CFS throttling on a latency-
+          # sensitive service adds tail latency for no benefit once requests
+          # are set correctly. Memory IS limited, because a leak without a
+          # limit takes down the whole node rather than one pod.
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+          # LIVENESS hits /health, which checks only that this process is
+          # responsive. It must NOT check downstreams -- a liveness probe that
+          # fails during a dependency outage makes OpenShift restart healthy
+          # pods, losing in-flight work and fixing nothing.
+          livenessProbe:
+            httpGet: {path: /health, port: 8090}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # READINESS hits /ready, which DOES check dependencies. A pod that
+          # cannot reach its database should stop receiving traffic while
+          # staying alive to recover.
+          readinessProbe:
+            httpGet: {path: /ready, port: 8090}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # STARTUP probe gives slow boots room without loosening the
+          # liveness thresholds. Without it, a service that takes 40s to
+          # connect to its switch gets killed at 15s, forever.
+          startupProbe:
+            httpGet: {path: /health, port: 8090}
+            periodSeconds: 5
+            failureThreshold: 30
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      # Long enough for in-flight transactions to finish. A payment cut off
+      # mid-authorization is exactly the ambiguous state the whole saga
+      # design exists to avoid creating.
+      terminationGracePeriodSeconds: 45
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ace-stub
+  labels:
+    app.kubernetes.io/name: ace-stub
+spec:
+  selector:
+    app.kubernetes.io/name: ace-stub
+  ports:
+    - port: 8090
+      targetPort: 8090
+      name: http

@@ -1,0 +1,292 @@
+---
+# ServiceAccount shared by every application pod.
+#
+# One SA for all seven is a deliberate simplification for a platform with no
+# Kubernetes API access and no cloud IAM bindings -- nothing here reads
+# Secrets via the API or assumes a cloud role, so per-service accounts would
+# be seven objects distinguishing nothing. The moment iso8583-adapter needs a
+# real cloud KMS binding, it gets its own SA; that is the trigger to split.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: microfinance
+  labels:
+    app.kubernetes.io/part-of: microfinance
+
+---
+# Non-secret configuration. Anything in here is visible to anyone who can
+# read the namespace, so nothing sensitive belongs in it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: microfinance-config
+data:
+  LOG_LEVEL: "INFO"
+  DEFAULT_CURRENCY_CODE: "840"
+
+  # Risk thresholds. In the ConfigMap rather than baked into the image
+  # specifically because these are the values most likely to need changing at
+  # short notice, in response to an actual attack pattern -- and a threshold
+  # change should be a config rollout, not a rebuild.
+  RISK_VELOCITY_WINDOW_SECONDS: "60"
+  RISK_VELOCITY_DECLINE_COUNT: "5"
+  RISK_VELOCITY_REVIEW_COUNT: "3"
+  RISK_AMOUNT_DECLINE_CENTS: "1000000"
+  RISK_AMOUNT_REVIEW_CENTS: "200000"
+  RISK_MANUAL_ENTRY_REVIEW_CENTS: "50000"
+
+  CLICKHOUSE_HOST: "clickhouse"
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_DB: "analytics"
+
+---
+# Secret TEMPLATE. The values below are placeholders and MUST be replaced.
+#
+# This file exists so the required keys are documented and `oc apply -k`
+# works on a fresh cluster. It is NOT how secrets should reach production:
+# use Sealed Secrets, External Secrets, or the cluster's vault integration,
+# and keep real values out of git entirely.
+#
+# stringData rather than data, so the values are readable and reviewable
+# rather than base64 that hides a typo until runtime.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: microfinance-secrets
+  annotations:
+    microfinance.io/warning: "Placeholder values. Replace before any real deployment."
+type: Opaque
+stringData:
+  # Signs every JWT. Every gateway replica and auth-service MUST share it --
+  # a token issued by one has to verify on another. Rotating it invalidates
+  # every live session, so rotation needs a two-key overlap period.
+  JWT_SECRET: "REPLACE-ME-generate-with-openssl-rand-hex-32"
+
+  POSTGRES_PASSWORD: "REPLACE-ME"
+
+  # 32 bytes of hex, wrapping the HSM base key.
+  #
+  # LOSING THIS IS UNRECOVERABLE. It decrypts the persisted base key, from
+  # which every per-transaction PIN key is derived. Without it, the
+  # persistence file is inert and the adapter silently falls back to
+  # generating an ephemeral key -- so PIN blocks encrypted before the loss
+  # can never be decrypted again. Back it up somewhere that is not this
+  # cluster.
+  HSM_MASTER_KEY_HEX: "REPLACE-ME-generate-with-openssl-rand-hex-32"
+
+  CLICKHOUSE_PASSWORD: ""
+
+---
+# The single public entry point. Nothing else in this namespace has a Route.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: api-gateway
+  annotations:
+    # Payments, so no plaintext. edge termination means TLS ends at the
+    # router and in-cluster traffic is plain HTTP -- acceptable inside a
+    # namespace with NetworkPolicies, and the point at which a real PCI
+    # environment would move to re-encrypt with mTLS via a service mesh.
+    haproxy.router.openshift.io/timeout: "60s"
+spec:
+  to:
+    kind: Service
+    name: api-gateway
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+---
+# Default deny. Without this, every pod in the namespace can reach every
+# other pod, and the careful separation of iso8583-adapter as the only holder
+# of key material means nothing -- any compromised pod could just call it.
+#
+# NetworkPolicy is additive: this denies everything, and the policies below
+# re-admit specific paths.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+
+---
+# The router may reach api-gateway. Nothing else may.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-router-to-gateway
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: api-gateway}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {policy-group.network.openshift.io/ingress: ""}
+      ports: [{protocol: TCP, port: 8080}]
+
+---
+# api-gateway may reach auth, transaction, and ledger. It may NOT reach
+# risk-service or iso8583-adapter directly -- those are the orchestrator's to
+# call, and letting the edge reach them would route around the saga.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-downstream
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [auth-service, transaction-service, ledger-service]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: api-gateway}
+
+---
+# transaction-service may reach risk, ledger, and the adapter.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-orchestrator-downstream
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [risk-service, ledger-service, iso8583-adapter]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: transaction-service}
+
+---
+# ONLY iso8583-adapter may reach the SOAP gateway.
+#
+# This is the policy that makes the adapter a genuine security boundary
+# rather than a naming convention. The gateway speaks to the switch; anything
+# that can call it can attempt a transaction without passing risk evaluation.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-adapter-to-soap-gateway
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: ace-stub}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: iso8583-adapter}
+      ports: [{protocol: TCP, port: 8090}]
+
+---
+# Only the SOAP gateway may open a TCP connection to the switch.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-switch
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: host-simulator}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: ace-stub}
+      ports: [{protocol: TCP, port: 9999}]
+
+---
+# Datastores accept traffic only from pods that are part of this platform.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-platform-to-datastores
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [postgres, redis, clickhouse]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/part-of: microfinance}
+
+---
+# Persisted, KMS-wrapped HSM base key.
+#
+# ReadWriteOnce, and iso8583-adapter runs exactly one replica -- see the note
+# on its Deployment. RWO would in any case prevent two pods on different
+# nodes from mounting this, which is a useful guardrail against someone
+# raising the replica count without reading that note.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: iso8583-adapter-hsm
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 128Mi
+
+---
+# Horizontal autoscaling for the two services that see request-proportional
+# load. Not for iso8583-adapter (single replica by design), not for the
+# datastores, and not for ace-stub (one stateful switch connection).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-gateway
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: api-gateway}
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+  behavior:
+    scaleDown:
+      # Slow down-scaling. Payment traffic is spiky, and shedding replicas
+      # eagerly means the next spike hits a cold, undersized deployment.
+      stabilizationWindowSeconds: 300
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: transaction-service
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: transaction-service}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+
+---
+# Keeps a quorum during voluntary disruption -- a node drain must not take
+# every gateway replica at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: api-gateway}

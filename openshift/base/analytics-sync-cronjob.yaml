@@ -1,0 +1,149 @@
+---
+# analytics-sync -- incremental ledger → ClickHouse load.
+#
+# A CronJob, not a Deployment: it runs to completion and exits with a status
+# code. Same shape as the monolith's reconciliation job, and the right shape
+# for anything whose schedule is "periodically" rather than "on request".
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: analytics-sync
+  labels:
+    app.kubernetes.io/name: analytics-sync
+    app.kubernetes.io/part-of: microfinance
+spec:
+  schedule: "0 * * * *"          # hourly, on the hour
+  timeZone: "UTC"                # never the node's local zone -- a DST shift
+                                 # would otherwise skip or repeat an hour
+
+  # THE IMPORTANT ONE. Forbid means a run that overruns its window is not
+  # joined by the next. Two concurrent syncs would both read from the same
+  # watermark, both load the same rows, and -- because the materialized view
+  # fires on INSERT, before ReplacingMergeTree deduplicates -- double-count
+  # every one of them in agg_daily_volume. The fact table would self-correct;
+  # the aggregate would not.
+  concurrencyPolicy: Forbid
+
+  # A run that has not started within 5 minutes of its schedule is skipped
+  # rather than queued. The next hourly run picks up everything anyway, since
+  # the sync is watermark-driven and not tied to a time window.
+  startingDeadlineSeconds: 300
+
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5      # keep more failures -- those are the ones
+                                 # anyone will want the logs for
+
+  jobTemplate:
+    spec:
+      # No retries. The job is resumable by design: the watermark only
+      # advances past confirmed batches, so the NEXT scheduled run picks up
+      # exactly where a failure left off. An automatic retry inside the same
+      # window would just re-run against an unchanged watermark and, on a
+      # persistent failure, burn through the backoff for nothing.
+      backoffLimit: 0
+
+      # Kill a run that has not finished in 50 minutes, so it cannot still be
+      # holding the Forbid lock when the next hour arrives.
+      activeDeadlineSeconds: 3000
+
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: microfinance
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: analytics-sync
+              image: analytics-sync:latest
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - configMapRef: {name: microfinance-config}
+                - secretRef: {name: microfinance-secrets}
+              env:
+                # Reads through ledger-service's API, NOT its database.
+                # Querying another service's tables directly is the single
+                # most common way a microservice split collapses back into a
+                # shared schema -- ledger-service could then never change
+                # ledger_entries without breaking a job it does not know
+                # exists. /internal/ledger/export is a contract; the table is
+                # not.
+                - {name: LEDGER_SERVICE_URL, value: "http://ledger-service:8084"}
+                - {name: SYNC_PAGE_SIZE, value: "10000"}
+              resources:
+                # Higher memory than the request-serving services: this one
+                # holds a full page of rows in memory before inserting.
+                requests: {cpu: 100m, memory: 256Mi}
+                limits: {memory: 1Gi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+
+---
+# Ledger integrity check.
+#
+# Asserts that total debits equal total credits across the whole ledger. If
+# that is ever false, something has gone genuinely wrong -- a partial write,
+# a bug, or tampering -- and the correct response is to stop and investigate,
+# never to retry.
+#
+# Separate from analytics-sync on purpose: this is a correctness alarm, and
+# it should keep firing on schedule even if the analytics pipeline is broken
+# or switched off entirely.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ledger-integrity-check
+  labels:
+    app.kubernetes.io/name: ledger-integrity-check
+    app.kubernetes.io/part-of: microfinance
+spec:
+  schedule: "*/30 * * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 10
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: microfinance
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: integrity-check
+              image: analytics-sync:latest      # same image, different entrypoint
+              command:
+                - /bin/sh
+                - -c
+                # Exits non-zero when the ledger does not balance, which is
+                # what the Job's failure -- and therefore the alert -- keys
+                # off. No parsing of log output required.
+                - |
+                  set -eu
+                  echo "checking ledger integrity..."
+                  BALANCED=$(python -c "
+                  import httpx, os, sys
+                  r = httpx.get(os.environ['LEDGER_SERVICE_URL'] + '/internal/ledger/integrity', timeout=30)
+                  r.raise_for_status()
+                  print('true' if r.json()['balanced'] else 'false')
+                  ")
+                  if [ "$BALANCED" != "true" ]; then
+                    echo "LEDGER DOES NOT BALANCE -- total debits != total credits."
+                    echo "Do not retry. Investigate before processing further transactions."
+                    exit 1
+                  fi
+                  echo "ledger balances."
+              env:
+                - {name: LEDGER_SERVICE_URL, value: "http://ledger-service:8084"}
+              resources:
+                requests: {cpu: 50m, memory: 64Mi}
+                limits: {memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}

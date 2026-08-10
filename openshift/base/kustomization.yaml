@@ -1,0 +1,51 @@
+# Base layer: the full platform, environment-agnostic.
+#
+# Never applied directly -- apply an overlay:
+#     oc apply -k openshift/overlays/dev
+#     oc apply -k openshift/overlays/prod
+#
+# The base deliberately contains dev-safe defaults (host-simulator present,
+# ledger reset absent, single-node datastores). The prod overlay removes what
+# should not exist there rather than the base trying to be neutral about
+# everything, because a base that configures nothing needs both overlays to
+# configure everything, and they drift.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Shared platform objects: ServiceAccount, ConfigMap, Secret template,
+  # Route, NetworkPolicies, PVC, HPAs, PDB.
+  - platform.yaml
+
+  # Redis, Postgres, ClickHouse, host-simulator.
+  - datastores.yaml
+
+  # Application services, one file each.
+  - api-gateway.yaml
+  - auth-service.yaml
+  - transaction-service.yaml
+  - risk-service.yaml
+  - ledger-service.yaml
+  - iso8583-adapter.yaml
+  - ace-stub.yaml
+
+  # Scheduled work.
+  - analytics-sync-cronjob.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: microfinance
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  # Overlays override newTag. Kept here so `kustomize build base` produces
+  # something coherent on its own, which makes diffing an overlay against the
+  # base meaningful.
+  - {name: api-gateway, newTag: latest}
+  - {name: auth-service, newTag: latest}
+  - {name: transaction-service, newTag: latest}
+  - {name: risk-service, newTag: latest}
+  - {name: ledger-service, newTag: latest}
+  - {name: iso8583-adapter, newTag: latest}
+  - {name: ace-stub, newTag: latest}
+  - {name: host-simulator, newTag: latest}
+  - {name: analytics-sync, newTag: latest}

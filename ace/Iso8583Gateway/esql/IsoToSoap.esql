@@ -1,0 +1,158 @@
+/*
+ * IsoToSoap.esql -- maps the ISO 8583 response the switch returned onto the
+ * SOAP response the caller receives.
+ *
+ * The return half of the mediation:
+ *     TCPIP Client Receive -> DFDL parse -> [ THIS Compute ] -> SOAP Reply
+ *
+ * Mirrors iso_to_soap_* in services/ace-stub/app/mediation.py.
+ */
+
+BROKER SCHEMA gateway.iso8583
+
+CREATE COMPUTE MODULE IsoToSoap
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE soapNs NAMESPACE 'urn:microfinance:iso8583:v1';
+        DECLARE isoNs  NAMESPACE 'urn:microfinance:iso8583:dfdl:v1';
+
+        DECLARE iso REFERENCE TO InputRoot.DFDL.isoNs:ISO8583Message;
+
+        SET OutputRoot.Properties.MessageFormat = '';
+        CREATE LASTCHILD OF OutputRoot DOMAIN 'SOAP';
+
+        DECLARE mti CHARACTER iso.isoNs:MTI;
+
+        CASE mti
+            WHEN '0210' THEN CALL AuthorizeResponse(iso, soapNs, isoNs);
+            WHEN '0410' THEN CALL ReverseResponse(iso, soapNs, isoNs);
+            WHEN '0810' THEN CALL NetworkResponse(iso, soapNs, isoNs);
+            ELSE
+                -- An unrecognised MTI is not something to guess at. Faulting
+                -- is correct: returning a partially-populated response would
+                -- let the caller act on fields that were never set.
+                THROW USER EXCEPTION MESSAGE 3002
+                    VALUES('Unexpected response MTI from the switch: ' || COALESCE(mti, '<none>'));
+        END CASE;
+
+        RETURN TRUE;
+    END;
+
+    CREATE PROCEDURE AuthorizeResponse(IN iso REFERENCE, IN soapNs NAMESPACE, IN isoNs NAMESPACE)
+    BEGIN
+        DECLARE out REFERENCE TO OutputRoot.SOAP.Body;
+        DECLARE code CHARACTER COALESCE(iso.isoNs:DE039_ResponseCode, '');
+
+        CREATE LASTCHILD OF OutputRoot.SOAP.Body AS out NAME soapNs:authorizeResponse;
+
+        SET out.soapNs:responseCode = code;
+        SET out.soapNs:responseText = ResponseText(code);
+        SET out.soapNs:stan         = COALESCE(iso.isoNs:DE011_STAN, '000000');
+        SET out.soapNs:rrn          = COALESCE(iso.isoNs:DE037_RRN, '');
+        SET out.soapNs:mti          = iso.isoNs:MTI;
+
+        -- Omitted rather than sent empty when the switch did not supply one.
+        -- A declined transaction has no authorization ID, and an empty
+        -- string would read as "authorized with a blank ID".
+        IF iso.isoNs:DE038_AuthId IS NOT NULL AND TRIM(iso.isoNs:DE038_AuthId) <> '' THEN
+            SET out.soapNs:authId = TRIM(iso.isoNs:DE038_AuthId);
+        END IF;
+    END;
+
+    CREATE PROCEDURE ReverseResponse(IN iso REFERENCE, IN soapNs NAMESPACE, IN isoNs NAMESPACE)
+    BEGIN
+        DECLARE out REFERENCE TO OutputRoot.SOAP.Body;
+        DECLARE code CHARACTER COALESCE(iso.isoNs:DE039_ResponseCode, '00');
+
+        CREATE LASTCHILD OF OutputRoot.SOAP.Body AS out NAME soapNs:reverseResponse;
+        SET out.soapNs:responseCode = code;
+        SET out.soapNs:responseText = ResponseText(code);
+        SET out.soapNs:stan         = COALESCE(iso.isoNs:DE011_STAN, '000000');
+    END;
+
+    CREATE PROCEDURE NetworkResponse(IN iso REFERENCE, IN soapNs NAMESPACE, IN isoNs NAMESPACE)
+    BEGIN
+        DECLARE out REFERENCE TO OutputRoot.SOAP.Body;
+
+        CREATE LASTCHILD OF OutputRoot.SOAP.Body AS out NAME soapNs:networkManagementResponse;
+        -- An 0810 in this switch's dialect carries no DE 39: arrival of the
+        -- response IS the acknowledgement, so '00' is synthesised.
+        SET out.soapNs:responseCode = COALESCE(iso.isoNs:DE039_ResponseCode, '00');
+        SET out.soapNs:networkCode  = COALESCE(iso.isoNs:DE070_NetworkCode, '');
+        SET out.soapNs:stan         = COALESCE(iso.isoNs:DE011_STAN, '000000');
+    END;
+
+    /*
+     * DE 39 decoded to text, resolved once here so no downstream service
+     * needs its own copy of the code table.
+     *
+     * Only the codes this platform actually encounters are listed. An
+     * unmapped code returns a descriptive string rather than NULL -- a
+     * decline with no stated reason is a support ticket, and "Unmapped
+     * response code 'XY'" at least tells the reader what to go and look up.
+     */
+    CREATE PROCEDURE ResponseText(IN code CHARACTER) RETURNS CHARACTER
+    BEGIN
+        CASE code
+            WHEN '00' THEN RETURN 'Approved / completed successfully';
+            WHEN '01' THEN RETURN 'Refer to card issuer';
+            WHEN '03' THEN RETURN 'Invalid merchant';
+            WHEN '04' THEN RETURN 'Pick up card';
+            WHEN '05' THEN RETURN 'Do not honor';
+            WHEN '12' THEN RETURN 'Invalid transaction';
+            WHEN '13' THEN RETURN 'Invalid amount';
+            WHEN '14' THEN RETURN 'Invalid card number';
+            WHEN '30' THEN RETURN 'Format error';
+            WHEN '41' THEN RETURN 'Lost card, pick up';
+            WHEN '43' THEN RETURN 'Stolen card, pick up';
+            WHEN '51' THEN RETURN 'Insufficient funds';
+            WHEN '54' THEN RETURN 'Expired card';
+            WHEN '55' THEN RETURN 'Incorrect PIN';
+            WHEN '57' THEN RETURN 'Transaction not permitted to cardholder';
+            WHEN '61' THEN RETURN 'Exceeds withdrawal amount limit';
+            WHEN '65' THEN RETURN 'Exceeds withdrawal frequency limit';
+            WHEN '75' THEN RETURN 'PIN tries exceeded';
+            WHEN '76' THEN RETURN 'Unable to locate previous message';
+            WHEN '91' THEN RETURN 'Issuer or switch inoperative';
+            WHEN '94' THEN RETURN 'Duplicate transmission';
+            WHEN '96' THEN RETURN 'System malfunction';
+            ELSE RETURN 'Unmapped response code ''' || code || '''';
+        END CASE;
+    END;
+END MODULE;
+
+
+/*
+ * The timeout path.
+ *
+ * Wired to the TCPIP Client Receive node's Timeout terminal, which fires
+ * when the switch accepted our 0200 and never answered.
+ *
+ * THIS IS THE MOST IMPORTANT ERROR PATH IN THE PLATFORM. The transaction may
+ * have been authorized and the cardholder already debited -- only the
+ * response was lost. So two things happen, in this order:
+ *
+ *   1. an 0400 reversal is emitted, to undo whatever may have happened
+ *   2. a SOAP fault carrying category=SWITCH_TIMEOUT is returned
+ *
+ * The fault must NOT say "declined". A caller told "declined" records
+ * nothing and moves on; a caller told SWITCH_TIMEOUT knows the outcome is
+ * unknown and skips the ledger posting, leaving daily reconciliation as the
+ * backstop. iso8583-adapter keys on exactly that string.
+ */
+CREATE COMPUTE MODULE HandleSwitchTimeout
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE soapNs NAMESPACE 'urn:microfinance:iso8583:v1';
+
+        SET OutputRoot.Properties.MessageFormat = '';
+        CREATE LASTCHILD OF OutputRoot DOMAIN 'SOAP';
+
+        SET OutputRoot.SOAP.Body.soapNs:Fault.faultcode   = 'soapenv:Server';
+        SET OutputRoot.SOAP.Body.soapNs:Fault.faultstring =
+            'Switch did not respond within the configured timeout -- outcome UNKNOWN, reversal sent';
+        SET OutputRoot.SOAP.Body.soapNs:Fault.detail      = 'category=SWITCH_TIMEOUT';
+
+        RETURN TRUE;
+    END;
+END MODULE;

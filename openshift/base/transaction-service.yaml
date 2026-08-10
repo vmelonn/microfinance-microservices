@@ -1,0 +1,118 @@
+---
+# transaction-service
+# The saga orchestrator. Stateless -- all saga state is in the request,
+    # so a pod dying mid-saga loses that transaction but corrupts nothing.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-service
+  labels:
+    app.kubernetes.io/name: transaction-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: transaction-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0    # never drop below the desired count during a roll
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: transaction-service
+        app.kubernetes.io/part-of: microfinance
+    spec:
+      serviceAccountName: microfinance
+      # OpenShift's restricted-v2 SCC assigns a random UID and drops all
+      # capabilities. Declaring that here rather than relying on the default
+      # means the manifest states its own requirements, and a cluster with a
+      # different default SCC still gets the intended posture.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: transaction-service
+          image: transaction-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8082
+              name: http
+          envFrom:
+            - configMapRef: {name: microfinance-config}
+            - secretRef: {name: microfinance-secrets}
+          env:
+            - name: RISK_SERVICE_URL
+              value: "http://risk-service:8083"
+            - name: LEDGER_SERVICE_URL
+              value: "http://ledger-service:8084"
+            - name: ISO8583_ADAPTER_URL
+              value: "http://iso8583-adapter:8085"
+            - name: MERCHANT_IDENTIFIER
+              value: "merchant:demo"
+          # Requests are what the scheduler packs on; limits are the hard cap.
+          # CPU limit is deliberately omitted: CFS throttling on a latency-
+          # sensitive service adds tail latency for no benefit once requests
+          # are set correctly. Memory IS limited, because a leak without a
+          # limit takes down the whole node rather than one pod.
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+          # LIVENESS hits /health, which checks only that this process is
+          # responsive. It must NOT check downstreams -- a liveness probe that
+          # fails during a dependency outage makes OpenShift restart healthy
+          # pods, losing in-flight work and fixing nothing.
+          livenessProbe:
+            httpGet: {path: /health, port: 8082}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # READINESS hits /ready, which DOES check dependencies. A pod that
+          # cannot reach its database should stop receiving traffic while
+          # staying alive to recover.
+          readinessProbe:
+            httpGet: {path: /ready, port: 8082}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # STARTUP probe gives slow boots room without loosening the
+          # liveness thresholds. Without it, a service that takes 40s to
+          # connect to its switch gets killed at 15s, forever.
+          startupProbe:
+            httpGet: {path: /health, port: 8082}
+            periodSeconds: 5
+            failureThreshold: 30
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      # Long enough for in-flight transactions to finish. A payment cut off
+      # mid-authorization is exactly the ambiguous state the whole saga
+      # design exists to avoid creating.
+      terminationGracePeriodSeconds: 45
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-service
+  labels:
+    app.kubernetes.io/name: transaction-service
+spec:
+  selector:
+    app.kubernetes.io/name: transaction-service
+  ports:
+    - port: 8082
+      targetPort: 8082
+      name: http

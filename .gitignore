@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+.env
+
+# Local databases. api/ledger.db in the monolith repo has held real names and
+# CNICs during testing; this rule exists so that mistake cannot repeat here.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# Persisted HSM key material. Encrypted, but there is no reason for it to
+# ever be in version control.
+*.enc
+hsm-base-key*
+
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Compiled ACE artifact -- built from ace/, not committed.
+*.bar

@@ -1,0 +1,221 @@
+/*
+ * SoapToIso.esql -- maps an inbound SOAP request onto the ISO 8583 logical
+ * tree that the DFDL serializer turns into wire bytes.
+ *
+ * This is the ACE implementation of the mapping written in Python in
+ * services/ace-stub/app/mediation.py. The two must agree field for field.
+ * If you add an element here, add it there.
+ *
+ * WHERE THIS SITS IN THE FLOW:
+ *     SOAP Input -> SOAP Extract -> [ THIS Compute ] -> TCPIP Client Output
+ *
+ * The output message domain is DFDL, referencing the ISO8583Message element
+ * in Iso8583Library/dfdl/ISO8583.xsd. Setting the Properties correctly is
+ * what tells ACE to serialize rather than to emit XML -- getting it wrong
+ * produces an XML document on the socket and a switch that closes the
+ * connection without explanation.
+ */
+
+BROKER SCHEMA gateway.iso8583
+
+CREATE COMPUTE MODULE SoapToIso
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        CALL CopyMessageHeaders();
+
+        -- Tell ACE this output is DFDL, and which global element models it.
+        SET OutputRoot.Properties.MessageSet    = 'Iso8583Library';
+        SET OutputRoot.Properties.MessageType   = '{urn:microfinance:iso8583:dfdl:v1}:ISO8583Message';
+        SET OutputRoot.Properties.MessageFormat = 'Binary1';
+
+        DECLARE soapNs NAMESPACE 'urn:microfinance:iso8583:v1';
+        DECLARE isoNs  NAMESPACE 'urn:microfinance:iso8583:dfdl:v1';
+
+        DECLARE body REFERENCE TO InputRoot.SOAP.Body;
+
+        -- Dispatch on the body's element name. document/literal wrapped puts
+        -- the operation name as the single child of Body, which is exactly
+        -- what makes this one-line dispatch possible.
+        DECLARE operation CHARACTER FIELDNAME(body.*[1]);
+
+        CASE operation
+            WHEN 'authorizeRequest'         THEN CALL BuildAuthorization(body, isoNs, soapNs);
+            WHEN 'reverseRequest'           THEN CALL BuildReversal(body, isoNs, soapNs);
+            WHEN 'networkManagementRequest' THEN CALL BuildNetworkManagement(body, isoNs, soapNs);
+            ELSE
+                THROW USER EXCEPTION MESSAGE 3001
+                    VALUES('Unsupported SOAP operation: ' || COALESCE(operation, '<none>'));
+        END CASE;
+
+        RETURN TRUE;
+    END;
+
+    /*
+     * MTI 0200 -- financial authorization request.
+     *
+     * DE 11 (STAN) is assigned HERE, from a shared counter, not taken from
+     * the caller. STAN must be unique per CONNECTION, and only the component
+     * that owns the connection can guarantee that. Two in-flight requests
+     * sharing a STAN would each receive the other's response -- the worst
+     * possible failure mode in a payment system.
+     */
+    CREATE PROCEDURE BuildAuthorization(IN body REFERENCE, IN isoNs NAMESPACE, IN soapNs NAMESPACE)
+    BEGIN
+        DECLARE req REFERENCE TO body.soapNs:authorizeRequest;
+        DECLARE out REFERENCE TO OutputRoot.DFDL;
+
+        CREATE LASTCHILD OF OutputRoot.DFDL AS out NAME isoNs:ISO8583Message;
+
+        SET out.isoNs:MTI = '0200';
+
+        SET out.isoNs:DE002_PAN.isoNs:LL    = LENGTH(req.soapNs:pan);
+        SET out.isoNs:DE002_PAN.isoNs:Value = req.soapNs:pan;
+
+        SET out.isoNs:DE003_ProcessingCode  = req.soapNs:processingCode;
+        SET out.isoNs:DE004_Amount          = req.soapNs:amountMinor;
+        SET out.isoNs:DE007_TransmissionDateTime = TransmissionDateTime();
+        SET out.isoNs:DE011_STAN            = NextStan();
+        SET out.isoNs:DE012_LocalTime       = LocalTime();
+        SET out.isoNs:DE013_LocalDate       = LocalDate();
+        SET out.isoNs:DE022_EntryMode       = COALESCE(req.soapNs:entryMode, '05');
+        SET out.isoNs:DE037_RRN             = req.soapNs:rrn;
+        SET out.isoNs:DE049_CurrencyCode    = COALESCE(req.soapNs:currencyCode, '840');
+
+        /*
+         * DE 52 arrives as 16 hex characters and must become 8 raw bytes.
+         *
+         * Hex on the wire between REST and SOAP is not decoration: an
+         * 8-byte PIN block contains arbitrary byte values, several of which
+         * (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F) are ILLEGAL in XML 1.0 with no
+         * escape sequence that makes them legal. Carrying it as hex is the
+         * only way it crosses an XML boundary intact; CAST ... AS BLOB is
+         * where it becomes bytes again.
+         *
+         * The IF guard matters: an absent DE (bitmap bit clear) and a
+         * present-but-empty one are DIFFERENT messages, and a switch
+         * answers the second with DE 39 = 30.
+         */
+        IF req.soapNs:pinBlockHex IS NOT NULL AND req.soapNs:pinBlockHex <> '' THEN
+            SET out.isoNs:DE052_PinBlock = CAST(req.soapNs:pinBlockHex AS BLOB);
+        END IF;
+
+        IF req.soapNs:ksn IS NOT NULL AND req.soapNs:ksn <> '' THEN
+            -- DE 53 is 16 digits; right-justify the KSN with leading zeros,
+            -- matching what mediation.py does.
+            SET out.isoNs:DE053_SecurityControl =
+                OVERLAY('0000000000000000' PLACING req.soapNs:ksn
+                        FROM (17 - LENGTH(req.soapNs:ksn)));
+        END IF;
+
+        IF req.soapNs:additionalData IS NOT NULL AND req.soapNs:additionalData <> '' THEN
+            SET out.isoNs:DE048_AdditionalData.isoNs:LLL   = LENGTH(req.soapNs:additionalData);
+            SET out.isoNs:DE048_AdditionalData.isoNs:Value = req.soapNs:additionalData;
+        END IF;
+    END;
+
+    /*
+     * MTI 0400 -- reversal.
+     *
+     * DE 90 (original data elements) is what ties the reversal to the
+     * transaction being reversed. Without it the switch cannot identify the
+     * original and answers DE 39 = 76 (unable to locate previous message).
+     *
+     * Layout, 42 digits total:
+     *     original MTI                  4
+     *     original STAN                 6
+     *     original transmission date   10
+     *     acquiring institution ID     11
+     *     forwarding institution ID    11
+     *
+     * The last three are zero-filled placeholders, matching
+     * mfcommon/iso8583/reversal.py. A production switch integration would
+     * echo the genuine values from the original request, and this is the
+     * first thing to fix when moving off the simulator.
+     */
+    CREATE PROCEDURE BuildReversal(IN body REFERENCE, IN isoNs NAMESPACE, IN soapNs NAMESPACE)
+    BEGIN
+        DECLARE req REFERENCE TO body.soapNs:reverseRequest;
+        DECLARE out REFERENCE TO OutputRoot.DFDL;
+
+        CREATE LASTCHILD OF OutputRoot.DFDL AS out NAME isoNs:ISO8583Message;
+
+        SET out.isoNs:MTI = '0400';
+        SET out.isoNs:DE002_PAN.isoNs:LL    = LENGTH(req.soapNs:pan);
+        SET out.isoNs:DE002_PAN.isoNs:Value = req.soapNs:pan;
+        SET out.isoNs:DE004_Amount          = req.soapNs:amountMinor;
+        SET out.isoNs:DE011_STAN            = NextStan();
+        SET out.isoNs:DE037_RRN             = req.soapNs:rrn;
+        SET out.isoNs:DE090_OriginalData    =
+              req.soapNs:originalMti
+           || req.soapNs:originalStan
+           || '0000000000'
+           || '00000000000'
+           || '00000000000';
+    END;
+
+    /* MTI 0800 -- sign-on (001), sign-off (002), echo test (301). */
+    CREATE PROCEDURE BuildNetworkManagement(IN body REFERENCE, IN isoNs NAMESPACE, IN soapNs NAMESPACE)
+    BEGIN
+        DECLARE req REFERENCE TO body.soapNs:networkManagementRequest;
+        DECLARE out REFERENCE TO OutputRoot.DFDL;
+
+        CREATE LASTCHILD OF OutputRoot.DFDL AS out NAME isoNs:ISO8583Message;
+
+        SET out.isoNs:MTI                = '0800';
+        SET out.isoNs:DE011_STAN         = NextStan();
+        SET out.isoNs:DE070_NetworkCode  = COALESCE(req.soapNs:networkCode, '301');
+    END;
+
+    /*
+     * STAN allocation.
+     *
+     * SHARED variable, so the counter is per-integration-server rather than
+     * per-message-thread -- a per-thread counter would hand the same STAN to
+     * concurrent transactions. The ATOMIC block is what makes
+     * read-increment-write indivisible across threads; without it two
+     * threads can read the same value before either writes.
+     *
+     * SCALING CAVEAT: this counter is per integration server. Running more
+     * than one ACE replica against ONE switch connection pool would need
+     * either a shared counter or a per-replica STAN range. With one replica
+     * holding one connection -- the deployment here -- it is correct.
+     */
+    CREATE PROCEDURE NextStan() RETURNS CHARACTER
+    BEGIN
+        DECLARE SHARED stanCounter INTEGER 0;
+        DECLARE result CHARACTER;
+
+        BEGIN ATOMIC
+            SET stanCounter = (stanCounter + 1) MOD 1000000;
+            SET result = RIGHT('000000' || CAST(stanCounter AS CHARACTER), 6);
+        END;
+
+        RETURN result;
+    END;
+
+    CREATE PROCEDURE TransmissionDateTime() RETURNS CHARACTER
+    BEGIN
+        -- DE 7 is MMDDhhmmss in UTC. Local time here would make every
+        -- transaction's timestamp depend on the pod's timezone.
+        RETURN CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'MMddHHmmss');
+    END;
+
+    CREATE PROCEDURE LocalTime() RETURNS CHARACTER
+    BEGIN
+        RETURN CAST(CURRENT_GMTTIME AS CHARACTER FORMAT 'HHmmss');
+    END;
+
+    CREATE PROCEDURE LocalDate() RETURNS CHARACTER
+    BEGIN
+        RETURN CAST(CURRENT_GMTDATE AS CHARACTER FORMAT 'MMdd');
+    END;
+
+    CREATE PROCEDURE CopyMessageHeaders() BEGIN
+        DECLARE i INTEGER 1;
+        DECLARE count INTEGER CARDINALITY(InputRoot.*[]);
+        WHILE i < count DO
+            SET OutputRoot.*[i] = InputRoot.*[i];
+            SET i = i + 1;
+        END WHILE;
+    END;
+END MODULE;

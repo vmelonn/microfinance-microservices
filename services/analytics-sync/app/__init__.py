@@ -1,0 +1,1 @@
+"""analytics-sync application package."""

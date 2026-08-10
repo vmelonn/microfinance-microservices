@@ -1,0 +1,47 @@
+# ACE integration server overrides.
+#
+# Mounted at /home/aceuser/ace-server/overrides/server.conf.yaml, which
+# layers on top of the image defaults rather than replacing them -- so an
+# ACE upgrade does not silently discard settings this file never mentioned.
+
+Defaults:
+  policyProject: 'Iso8583Policies'
+
+Log:
+  consoleLog: true
+  # JSON so the log aggregator can parse it, matching the structured format
+  # every Python service in this platform emits. Mixed formats in one
+  # aggregator means half the platform is not searchable.
+  consoleLogFormat: 'ibmjson'
+  eventLog: '/home/aceuser/ace-server/log/integration_server.txt'
+
+Statistics:
+  Snapshot:
+    publicationOn: 'active'
+    # Per-node timings. This is how you find out whether latency is the
+    # switch, the DFDL parse, or the SOAP serialization -- a question that is
+    # otherwise pure guesswork.
+    nodeDataLevel: 'basic'
+    outputFormat: 'json'
+    threadDataLevel: 'none'
+
+ResourceManagers:
+  JVM:
+    # ACE defaults are generous for a general-purpose broker. This flow does
+    # DFDL parsing and one TCP call; it does not need a large heap, and in a
+    # cluster the container memory limit must exceed the heap or the JVM gets
+    # OOM-killed by the kernel with no Java stack trace to explain it.
+    jvmMinHeapSize: 33554432    # 32 MB
+    jvmMaxHeapSize: 268435456   # 256 MB
+
+# Values below are placeholders overridden per environment via BAR overrides
+# (see overrides/) or the Deployment's environment variables. They are NOT
+# secrets -- the switch host is not sensitive, and nothing here needs to be.
+UserDefined:
+  SwitchHost: 'host-simulator'
+  SwitchPort: 9999
+  # Must be LOWER than iso8583-adapter's ISO8583_SOAP_TIMEOUT_SECONDS (20s).
+  # If the adapter gives up first, it manufactures an "unknown" outcome for a
+  # transaction ACE was about to resolve cleanly -- inventing ambiguity that
+  # did not exist, and triggering an unnecessary reversal.
+  SwitchTimeoutSeconds: 10

@@ -1,0 +1,161 @@
+# Production overlay.
+#
+#     oc apply -k openshift/overlays/prod
+#
+# READ BEFORE APPLYING. Three things must be true first:
+#
+#   1. microfinance-secrets holds REAL values. The base ships a placeholder
+#      Secret so a fresh cluster applies cleanly; applying it here would
+#      deploy a published JWT signing key. Use Sealed Secrets, External
+#      Secrets, or the cluster vault integration -- see the secretGenerator
+#      note below.
+#   2. SWITCH_HOST points at the acquirer's real endpoint. This overlay
+#      DELETES host-simulator; if the switch address is still the simulator's
+#      Service name, ace-stub will start and fail every transaction.
+#   3. Image tags are pinned to real digests, not `latest`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: microfinance-prod
+
+resources:
+  - ../../base
+
+commonLabels:
+  app.kubernetes.io/environment: prod
+
+# The fake switch must not exist in production. Deleting it here, rather than
+# omitting it from the base, means the deletion is visible in a diff.
+patches:
+  - target: {kind: Deployment, name: host-simulator}
+    patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: host-simulator}
+  - target: {kind: Service, name: host-simulator}
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata: {name: host-simulator}
+  - target: {kind: NetworkPolicy, name: allow-gateway-to-switch}
+    patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata: {name: allow-gateway-to-switch}
+
+  # Point the SOAP gateway at the real switch. Replace the placeholder host.
+  - target: {kind: Deployment, name: ace-stub}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: "switch.acquirer.example.net"
+
+  # Production-sized resources. The base's values are development defaults
+  # and would throttle under real load.
+  - target: {kind: Deployment, name: api-gateway}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+
+  - target: {kind: Deployment, name: transaction-service}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+
+  - target: {kind: Deployment, name: ledger-service}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+
+  # Postgres holds the money. Give it room, and a real volume.
+  - target: {kind: StatefulSet, name: postgres}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 2Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 4Gi
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 100Gi
+
+  # ClickHouse is memory-hungry by design -- it buffers inserts and holds
+  # mark caches. Under-provisioning produces MEMORY_LIMIT_EXCEEDED on queries
+  # that should be trivial.
+  - target: {kind: StatefulSet, name: clickhouse}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 4Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 8Gi
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 500Gi
+
+  # Redis holds more idempotency claims at production volume.
+  - target: {kind: Deployment, name: redis}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args/5
+        value: 2gb
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 3Gi
+
+configMapGenerator:
+  - name: microfinance-config
+    behavior: merge
+    literals:
+      - LOG_LEVEL=INFO
+
+# SECRETS ARE NOT GENERATED HERE, ON PURPOSE.
+#
+# A secretGenerator with literals would put the JWT signing key and the HSM
+# master key into git. Supply them out of band:
+#
+#   Sealed Secrets:    kubeseal < secret.yaml > sealed-secret.yaml, commit the sealed one
+#   External Secrets:  an ExternalSecret pointing at Vault / AWS Secrets Manager
+#   Manual:            oc create secret generic microfinance-secrets --from-literal=...
+#
+# HSM_MASTER_KEY_HEX especially: losing it makes every persisted PIN block
+# permanently undecryptable, and it must be backed up somewhere that is not
+# this cluster.
+
+images:
+  # Pin to digests before applying. `latest` in production means a pod
+  # restart can silently pick up a different build than its neighbours.
+  - {name: api-gateway, newTag: "1.0.0"}
+  - {name: auth-service, newTag: "1.0.0"}
+  - {name: transaction-service, newTag: "1.0.0"}
+  - {name: risk-service, newTag: "1.0.0"}
+  - {name: ledger-service, newTag: "1.0.0"}
+  - {name: iso8583-adapter, newTag: "1.0.0"}
+  - {name: ace-stub, newTag: "1.0.0"}
+  - {name: analytics-sync, newTag: "1.0.0"}

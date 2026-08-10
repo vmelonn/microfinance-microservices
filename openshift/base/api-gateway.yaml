@@ -1,0 +1,118 @@
+---
+# api-gateway
+# The only service with a Route. Two replicas by default -- the whole
+    # reason idempotency state lives in Redis rather than in process memory.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  labels:
+    app.kubernetes.io/name: api-gateway
+    app.kubernetes.io/part-of: microfinance
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0    # never drop below the desired count during a roll
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-gateway
+        app.kubernetes.io/part-of: microfinance
+    spec:
+      serviceAccountName: microfinance
+      # OpenShift's restricted-v2 SCC assigns a random UID and drops all
+      # capabilities. Declaring that here rather than relying on the default
+      # means the manifest states its own requirements, and a cluster with a
+      # different default SCC still gets the intended posture.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api-gateway
+          image: api-gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef: {name: microfinance-config}
+            - secretRef: {name: microfinance-secrets}
+          env:
+            - name: AUTH_SERVICE_URL
+              value: "http://auth-service:8081"
+            - name: TRANSACTION_SERVICE_URL
+              value: "http://transaction-service:8082"
+            - name: LEDGER_SERVICE_URL
+              value: "http://ledger-service:8084"
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
+          # Requests are what the scheduler packs on; limits are the hard cap.
+          # CPU limit is deliberately omitted: CFS throttling on a latency-
+          # sensitive service adds tail latency for no benefit once requests
+          # are set correctly. Memory IS limited, because a leak without a
+          # limit takes down the whole node rather than one pod.
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+          # LIVENESS hits /health, which checks only that this process is
+          # responsive. It must NOT check downstreams -- a liveness probe that
+          # fails during a dependency outage makes OpenShift restart healthy
+          # pods, losing in-flight work and fixing nothing.
+          livenessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # READINESS hits /ready, which DOES check dependencies. A pod that
+          # cannot reach its database should stop receiving traffic while
+          # staying alive to recover.
+          readinessProbe:
+            httpGet: {path: /ready, port: 8080}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # STARTUP probe gives slow boots room without loosening the
+          # liveness thresholds. Without it, a service that takes 40s to
+          # connect to its switch gets killed at 15s, forever.
+          startupProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 5
+            failureThreshold: 30
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      # Long enough for in-flight transactions to finish. A payment cut off
+      # mid-authorization is exactly the ambiguous state the whole saga
+      # design exists to avoid creating.
+      terminationGracePeriodSeconds: 45
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  labels:
+    app.kubernetes.io/name: api-gateway
+spec:
+  selector:
+    app.kubernetes.io/name: api-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http

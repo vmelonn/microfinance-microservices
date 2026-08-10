@@ -1,0 +1,364 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Iso8583Gateway - the contract between the REST world and the ISO 8583 world.
+
+  This one file is the entire interface to the payment switch. Two things
+  implement it:
+
+    1. ace-stub          - a Python SOAP service, runs today, no IBM licence
+    2. IBM ACE           - the real integration server, once entitled
+
+  Because both serve THIS file, swapping between them is a change to the
+  ISO8583_SOAP_ENDPOINT environment variable and nothing else. That is the
+  entire point of putting a WSDL here rather than letting each side invent
+  its own request shape.
+
+  Style: document/literal WRAPPED. Chosen deliberately over rpc/encoded:
+    - rpc/encoded is not WS-I Basic Profile compliant and is effectively
+      deprecated; ACE supports it but tooling around it is poor.
+    - document/literal wrapped keeps the operation name as the single child
+      of soap:Body, which is what lets a server dispatch on the body element
+      alone. mfcommon/soap/envelope.py's parse_request() relies on exactly
+      that: body[0].tag IS the operation name.
+
+  All scalar fields are xsd:string, including the amounts. This is not
+  laziness. ISO 8583 numeric fields are FIXED-WIDTH, zero-padded decimal
+  strings - DE 4 is exactly 12 digits, "000000005000" for $50.00. Typing
+  that as xsd:long would let a SOAP stack normalise it to 5000 and silently
+  destroy the padding the DFDL serializer depends on. The wire format is
+  string-shaped, so the contract is string-shaped, and the padding is
+  enforced by xsd:pattern facets instead.
+-->
+<wsdl:definitions
+    name="Iso8583Gateway"
+    targetNamespace="urn:microfinance:iso8583:v1"
+    xmlns:tns="urn:microfinance:iso8583:v1"
+    xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+
+  <wsdl:types>
+    <xsd:schema targetNamespace="urn:microfinance:iso8583:v1"
+                elementFormDefault="qualified">
+
+      <!-- ============ reusable constrained types ============ -->
+
+      <!-- DE 2. 12-19 digits. Rejecting a malformed PAN here means ACE
+           answers with a SOAP Client fault instead of building a message
+           the switch will reject 400ms later with DE 39 = 30. -->
+      <xsd:simpleType name="Pan">
+        <xsd:restriction base="xsd:string">
+          <xsd:pattern value="[0-9]{12,19}"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+
+      <!-- DE 4. Exactly 12 digits, zero-padded, minor units. -->
+      <xsd:simpleType name="AmountMinor">
+        <xsd:restriction base="xsd:string">
+          <xsd:pattern value="[0-9]{12}"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+
+      <!-- DE 3. 6 digits: TT (transaction type) + from-account + to-account. -->
+      <xsd:simpleType name="ProcessingCode">
+        <xsd:restriction base="xsd:string">
+          <xsd:pattern value="[0-9]{6}"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+
+      <!-- DE 11. 6 digits, wraps at 999999. -->
+      <xsd:simpleType name="Stan">
+        <xsd:restriction base="xsd:string">
+          <xsd:pattern value="[0-9]{6}"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+
+      <!-- DE 37. 12 characters, alphanumeric in the standard. -->
+      <xsd:simpleType name="Rrn">
+        <xsd:restriction base="xsd:string">
+          <xsd:pattern value="[0-9A-Za-z]{12}"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+
+      <!-- DE 52. Exactly 8 bytes, carried as 16 HEX characters.
+
+           Hex, not raw bytes, and not base64. The reason is concrete: an
+           8-byte encrypted PIN block contains arbitrary byte values, and
+           several of those (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F) are ILLEGAL
+           in XML 1.0 - not merely awkward to escape, but forbidden with no
+           escape sequence that makes them legal. Passing DE 52 through as
+           latin-1 text, which is what the monolith did over its raw socket,
+           produces an XML document that cannot be parsed roughly 5% of the
+           time, at random, depending on the ciphertext. Hex makes it
+           always-safe and stays human-readable in a trace. -->
+      <xsd:simpleType name="PinBlockHex">
+        <xsd:restriction base="xsd:string">
+          <xsd:pattern value="[0-9a-fA-F]{16}"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+
+      <!-- DE 39. 2 characters. "00" is the only approval. -->
+      <xsd:simpleType name="ResponseCode">
+        <xsd:restriction base="xsd:string">
+          <xsd:length value="2"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+
+      <!-- ============ authorize: MTI 0200 -> 0210 ============ -->
+
+      <xsd:element name="authorizeRequest">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="pan"            type="tns:Pan"/>
+            <xsd:element name="processingCode" type="tns:ProcessingCode"/>
+            <xsd:element name="amountMinor"    type="tns:AmountMinor"/>
+            <xsd:element name="entryMode"      type="xsd:string"/>
+            <xsd:element name="rrn"            type="tns:Rrn"/>
+            <xsd:element name="currencyCode"   type="xsd:string"/>
+            <!-- Optional: a balance inquiry carries no PIN. minOccurs=0
+                 rather than nillable, because an ABSENT DE and a
+                 PRESENT-BUT-EMPTY DE are different ISO 8583 messages -
+                 the bitmap bit differs, and a switch answers the second
+                 with a format error. -->
+            <xsd:element name="pinBlockHex"    type="tns:PinBlockHex" minOccurs="0"/>
+            <xsd:element name="ksn"            type="xsd:string"      minOccurs="0"/>
+            <!-- Absent means "the gateway assigns one". ACE owns STAN
+                 allocation when this is omitted, which is correct: STAN
+                 must be unique per CONNECTION, and only the component
+                 holding the connection can guarantee that. -->
+            <xsd:element name="stan"           type="tns:Stan"        minOccurs="0"/>
+            <!-- DE 103, the credit side of a transfer. -->
+            <xsd:element name="accountId2"     type="xsd:string"      minOccurs="0"/>
+            <!-- DE 48, additional data (private use). An open container
+                 whose meaning is defined per-processor, not by the standard.
+                 Exposed because every real acquirer integration eventually
+                 needs it for something (loyalty identifiers, terminal
+                 capability flags, STIP hints), and adding a field to a
+                 deployed WSDL is far more disruptive than reserving the
+                 pass-through now.
+
+                 The host simulator also interprets two values here as test
+                 hooks -- "SIMULATE_TIMEOUT" and "DELAY:<seconds>" -- which
+                 is what lets the timeout and slow-response paths be tested
+                 without a real misbehaving switch. That is a property of
+                 the SIMULATOR, not of this contract: a production switch
+                 sees an ordinary DE 48 and treats it however its own spec
+                 says. -->
+            <xsd:element name="additionalData" type="xsd:string"      minOccurs="0"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="authorizeResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="responseCode" type="tns:ResponseCode"/>
+            <!-- The DE 39 code decoded against the standard's table, so
+                 callers log something readable without shipping the whole
+                 lookup table into every service. -->
+            <xsd:element name="responseText" type="xsd:string"/>
+            <xsd:element name="authId"       type="xsd:string" minOccurs="0"/>
+            <xsd:element name="stan"         type="tns:Stan"/>
+            <xsd:element name="rrn"          type="tns:Rrn"/>
+            <xsd:element name="mti"          type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <!-- ============ reverse: MTI 0400 -> 0410 ============ -->
+
+      <xsd:element name="reverseRequest">
+        <xsd:complexType>
+          <xsd:sequence>
+            <!-- originalMti + originalStan are what ACE assembles DE 90
+                 (original data elements) from. Without both, the switch
+                 cannot identify which transaction is being reversed and
+                 answers DE 39 = 76. -->
+            <xsd:element name="originalMti"  type="xsd:string"/>
+            <xsd:element name="originalStan" type="tns:Stan"/>
+            <xsd:element name="rrn"          type="tns:Rrn"/>
+            <xsd:element name="amountMinor"  type="tns:AmountMinor"/>
+            <xsd:element name="pan"          type="tns:Pan"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="reverseResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="responseCode" type="tns:ResponseCode"/>
+            <xsd:element name="responseText" type="xsd:string"/>
+            <xsd:element name="stan"         type="tns:Stan"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <!-- ============ networkManagement: MTI 0800 -> 0810 ============ -->
+
+      <xsd:element name="networkManagementRequest">
+        <xsd:complexType>
+          <xsd:sequence>
+            <!-- DE 70. 001 sign-on, 002 sign-off, 301 echo test. -->
+            <xsd:element name="networkCode" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="networkManagementResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="responseCode" type="tns:ResponseCode"/>
+            <xsd:element name="networkCode"  type="xsd:string"/>
+            <xsd:element name="stan"         type="tns:Stan"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <!-- ============ fault detail ============ -->
+
+      <!-- A declared fault, not just a generic soap:Fault. The caller has to
+           distinguish three genuinely different situations:
+
+             VALIDATION      - the request was malformed. Never retry.
+             SWITCH_DOWN     - no connection to the switch. Nothing was
+                               sent, so no reversal is needed.
+             SWITCH_TIMEOUT  - sent, but no answer. Outcome UNKNOWN. The
+                               caller MUST reverse. This is the dangerous
+                               one, and collapsing it into a generic error
+                               is how a cardholder ends up debited for a
+                               transaction the system reported as failed. -->
+      <xsd:element name="Iso8583Fault">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="category" type="xsd:string"/>
+            <xsd:element name="message"  type="xsd:string"/>
+            <xsd:element name="stan"     type="xsd:string" minOccurs="0"/>
+            <xsd:element name="rrn"      type="xsd:string" minOccurs="0"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+    </xsd:schema>
+  </wsdl:types>
+
+  <!-- ============ messages ============ -->
+
+  <wsdl:message name="authorizeRequestMessage">
+    <wsdl:part name="parameters" element="tns:authorizeRequest"/>
+  </wsdl:message>
+  <wsdl:message name="authorizeResponseMessage">
+    <wsdl:part name="parameters" element="tns:authorizeResponse"/>
+  </wsdl:message>
+
+  <wsdl:message name="reverseRequestMessage">
+    <wsdl:part name="parameters" element="tns:reverseRequest"/>
+  </wsdl:message>
+  <wsdl:message name="reverseResponseMessage">
+    <wsdl:part name="parameters" element="tns:reverseResponse"/>
+  </wsdl:message>
+
+  <wsdl:message name="networkManagementRequestMessage">
+    <wsdl:part name="parameters" element="tns:networkManagementRequest"/>
+  </wsdl:message>
+  <wsdl:message name="networkManagementResponseMessage">
+    <wsdl:part name="parameters" element="tns:networkManagementResponse"/>
+  </wsdl:message>
+
+  <wsdl:message name="Iso8583FaultMessage">
+    <wsdl:part name="fault" element="tns:Iso8583Fault"/>
+  </wsdl:message>
+
+  <!-- ============ port type ============ -->
+
+  <wsdl:portType name="Iso8583GatewayPortType">
+    <wsdl:operation name="authorize">
+      <wsdl:documentation>
+        Financial authorization request. MTI 0200, expects 0210.
+        Blocks until the switch answers or the gateway's timeout expires.
+        On timeout the gateway raises SWITCH_TIMEOUT and the CALLER is
+        responsible for issuing reverse() - the gateway does not reverse
+        on the caller's behalf, because only the caller knows whether the
+        business transaction should still be attempted.
+      </wsdl:documentation>
+      <wsdl:input  message="tns:authorizeRequestMessage"/>
+      <wsdl:output message="tns:authorizeResponseMessage"/>
+      <wsdl:fault name="Iso8583Fault" message="tns:Iso8583FaultMessage"/>
+    </wsdl:operation>
+
+    <wsdl:operation name="reverse">
+      <wsdl:documentation>
+        Reversal advice. MTI 0400, expects 0410. Idempotent at the switch:
+        reversing an already-reversed transaction is acknowledged, not
+        rejected. Safe - and required - to retry until acknowledged.
+      </wsdl:documentation>
+      <wsdl:input  message="tns:reverseRequestMessage"/>
+      <wsdl:output message="tns:reverseResponseMessage"/>
+      <wsdl:fault name="Iso8583Fault" message="tns:Iso8583FaultMessage"/>
+    </wsdl:operation>
+
+    <wsdl:operation name="networkManagement">
+      <wsdl:documentation>
+        Sign-on, sign-off, and echo test. MTI 0800, expects 0810.
+        The echo is what a readiness probe should call: it proves the whole
+        chain (gateway -> TCP -> switch) is alive, not merely that the
+        gateway process is running.
+      </wsdl:documentation>
+      <wsdl:input  message="tns:networkManagementRequestMessage"/>
+      <wsdl:output message="tns:networkManagementResponseMessage"/>
+      <wsdl:fault name="Iso8583Fault" message="tns:Iso8583FaultMessage"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <!-- ============ binding ============ -->
+
+  <wsdl:binding name="Iso8583GatewaySoapBinding" type="tns:Iso8583GatewayPortType">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+
+    <wsdl:operation name="authorize">
+      <!-- soapAction is mandatory in SOAP 1.1 and ACE routes on it.
+           mfcommon/soap/client.py builds these exact strings; a mismatch
+           produces an HTTP 500 whose message does not mention SOAPAction
+           at all, which is a genuinely miserable afternoon. -->
+      <soap:operation soapAction="urn:microfinance:iso8583:v1/authorizeRequest" style="document"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+      <wsdl:fault name="Iso8583Fault">
+        <soap:fault name="Iso8583Fault" use="literal"/>
+      </wsdl:fault>
+    </wsdl:operation>
+
+    <wsdl:operation name="reverse">
+      <soap:operation soapAction="urn:microfinance:iso8583:v1/reverseRequest" style="document"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+      <wsdl:fault name="Iso8583Fault">
+        <soap:fault name="Iso8583Fault" use="literal"/>
+      </wsdl:fault>
+    </wsdl:operation>
+
+    <wsdl:operation name="networkManagement">
+      <soap:operation soapAction="urn:microfinance:iso8583:v1/networkManagementRequest" style="document"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+      <wsdl:fault name="Iso8583Fault">
+        <soap:fault name="Iso8583Fault" use="literal"/>
+      </wsdl:fault>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <!-- ============ service ============ -->
+
+  <wsdl:service name="Iso8583GatewayService">
+    <wsdl:documentation>
+      The location below is the in-cluster address of whichever
+      implementation is deployed. Callers do NOT read it from here - they
+      take the endpoint from ISO8583_SOAP_ENDPOINT, so the same WSDL serves
+      ace-stub in dev and a real ACE integration server in production
+      without being edited.
+    </wsdl:documentation>
+    <wsdl:port name="Iso8583GatewayPort" binding="tns:Iso8583GatewaySoapBinding">
+      <soap:address location="http://ace-stub:8090/Iso8583Gateway"/>
+    </wsdl:port>
+  </wsdl:service>
+
+</wsdl:definitions>

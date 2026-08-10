@@ -1,0 +1,262 @@
+# The whole platform, one command:
+#     docker compose up --build
+#
+# Nine services, three datastores. This file is the local mirror of what the
+# OpenShift manifests deploy, and the two are kept deliberately close so that
+# "works in compose" is evidence about the cluster rather than a coincidence.
+#
+# TWO REPLICAS OF api-gateway, on purpose. Single-replica compose files hide
+# the entire class of bug this platform's Redis usage exists to prevent:
+# idempotency and velocity state living in one process's memory looks
+# perfectly correct until a retry lands on a different pod. Running two makes
+# that observable -- see tests/e2e/test_cross_replica.py.
+#
+# THE SOAP HOP: iso8583-adapter -> ace-stub is the single SOAP boundary.
+# To point it at a real ACE integration server instead, change ONE variable:
+#     ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway
+# and start the `ace` service in the commented block at the bottom.
+
+name: microfinance-microservices
+
+x-common-env: &common-env
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # Every replica MUST share this. A token issued by gateway-1 has to verify
+  # on gateway-2, and auth-service has to sign with the same key both read.
+  JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-secret-do-not-use-in-production}
+
+x-python-build: &python-build
+  context: .          # repo root, so libs/mfcommon is in the build context
+  dockerfile: null    # overridden per service
+
+services:
+
+  # ======================= datastores =======================
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: microfinance
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-password}
+      # Two logical databases, one server. In the cluster these are separate
+      # StatefulSets -- database-per-service is about ownership and
+      # independent migration, not about how many processes are running.
+      POSTGRES_MULTIPLE_DATABASES: auth,ledger
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U microfinance"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: analytics
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"     # HTTP interface -- what clickhouse-connect uses
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      # ClickHouse opens a lot of files; the default limit makes it fall over
+      # under any real ingestion load with an error that does not mention
+      # file descriptors.
+      nofile: {soft: 262144, hard: 262144}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ======================= the ISO 8583 edge =======================
+
+  host-simulator:
+    build:
+      context: .
+      dockerfile: services/host-simulator/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      SIMULATOR_HOST: 0.0.0.0
+      SIMULATOR_PORT: "9999"
+
+  ace-stub:
+    build:
+      context: .
+      dockerfile: services/ace-stub/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      SWITCH_HOST: host-simulator
+      SWITCH_PORT: "9999"
+      SWITCH_TIMEOUT_SECONDS: "10"
+      WSDL_PATH: /app/wsdl/Iso8583Gateway.wsdl
+    ports:
+      - "8090:8090"     # exposed so you can fetch ?wsdl and poke it with curl
+    depends_on:
+      host-simulator: {condition: service_started}
+
+  # ======================= application services =======================
+
+  iso8583-adapter:
+    build:
+      context: .
+      dockerfile: services/iso8583-adapter/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      # THE ONE VARIABLE that decides whether this platform talks to a Python
+      # stand-in or to a real IBM ACE integration server.
+      ISO8583_SOAP_ENDPOINT: http://ace-stub:8090/Iso8583Gateway
+      ISO8583_SOAP_TIMEOUT_SECONDS: "20"
+      HSM_KEY_PERSISTENCE_PATH: /tmp/hsm-base-key.enc
+      # 32 bytes of hex. Dev-only: in the cluster this comes from a Secret,
+      # and losing it means every persisted PIN block becomes undecryptable.
+      HSM_MASTER_KEY_HEX: ${HSM_MASTER_KEY_HEX:-0000000000000000000000000000000000000000000000000000000000000001}
+    depends_on:
+      ace-stub: {condition: service_started}
+
+  ledger-service:
+    build:
+      context: .
+      dockerfile: services/ledger-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      LEDGER_DSN: postgresql://microfinance:${POSTGRES_PASSWORD:-dev-password}@postgres:5432/ledger
+      ALLOW_LEDGER_RESET: "1"   # dev only; unset in every non-dev overlay
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      AUTH_DSN: postgresql://microfinance:${POSTGRES_PASSWORD:-dev-password}@postgres:5432/auth
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  risk-service:
+    build:
+      context: .
+      dockerfile: services/risk-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis: {condition: service_healthy}
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: services/transaction-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      RISK_SERVICE_URL: http://risk-service:8083
+      LEDGER_SERVICE_URL: http://ledger-service:8084
+      ISO8583_ADAPTER_URL: http://iso8583-adapter:8085
+      MERCHANT_IDENTIFIER: merchant:demo
+    depends_on:
+      risk-service: {condition: service_started}
+      ledger-service: {condition: service_started}
+      iso8583-adapter: {condition: service_started}
+
+  # Two gateway replicas sharing one Redis -- the point of the cache layer,
+  # and unprovable with a single process.
+  api-gateway-1:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment: &gateway-env
+      <<: *common-env
+      AUTH_SERVICE_URL: http://auth-service:8081
+      TRANSACTION_SERVICE_URL: http://transaction-service:8082
+      LEDGER_SERVICE_URL: http://ledger-service:8084
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis: {condition: service_healthy}
+      auth-service: {condition: service_started}
+      transaction-service: {condition: service_started}
+
+  api-gateway-2:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment: *gateway-env
+    depends_on:
+      redis: {condition: service_healthy}
+      auth-service: {condition: service_started}
+      transaction-service: {condition: service_started}
+
+  # ======================= scheduled work =======================
+
+  # Runs once on `docker compose up` rather than on a schedule -- compose has
+  # no cron. In the cluster this is a CronJob; see
+  # openshift/base/analytics-sync-cronjob.yaml.
+  analytics-sync:
+    build:
+      context: .
+      dockerfile: services/analytics-sync/Dockerfile
+    profiles: ["analytics"]     # opt in: docker compose --profile analytics up
+    environment:
+      <<: *common-env
+      LEDGER_SERVICE_URL: http://ledger-service:8084
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: analytics
+    depends_on:
+      clickhouse: {condition: service_healthy}
+      ledger-service: {condition: service_started}
+
+  # ======================= real IBM ACE =======================
+  #
+  # Uncomment once the entitlement key arrives, then point
+  # iso8583-adapter's ISO8583_SOAP_ENDPOINT at http://ace:7800/Iso8583Gateway
+  # and stop ace-stub. Nothing else changes -- ace-stub and ACE serve the
+  # same WSDL, and every test above is written against that contract rather
+  # than against either implementation.
+  #
+  # ace:
+  #   build:
+  #     context: ./ace
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     LICENSE: accept
+  #     ACE_SERVER_NAME: MFSERVER
+  #     SWITCH_HOST: host-simulator
+  #     SWITCH_PORT: "9999"
+  #   ports:
+  #     - "7800:7800"     # SOAP + admin REST
+  #     - "7600:7600"     # web UI
+  #   depends_on:
+  #     host-simulator: {condition: service_started}
+
+volumes:
+  postgres-data:
+  clickhouse-data:

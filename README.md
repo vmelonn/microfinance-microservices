@@ -1,0 +1,193 @@
+# microfinance-microservices
+
+A card/account transaction platform: **REST on the outside, SOAP at the
+integration boundary, ISO 8583 on the wire.** Seven services plus two test
+doubles, one repository, one Dockerfile per service, deployed to OpenShift.
+
+This is the decomposition of [`microfinance-stack`](../microfinance-stack) —
+the same eight layers, split along ownership boundaries and given the
+machinery a distributed system needs and a monolith does not.
+
+```
+                                          ┌─────────────┐
+  mobile client ──REST/JSON──▶ api-gateway│  the only   │
+                                  │       │   Route     │
+                                  │       └─────────────┘
+                    ┌─────────────┼─────────────┐
+                    ▼             ▼             ▼
+              auth-service  transaction-  ledger-service
+                            service            │
+                                  │            │ Postgres
+                    ┌─────────────┤
+                    ▼             ▼
+              risk-service   iso8583-adapter ◀── the crypto edge
+                    │             │
+                  Redis           │  ══ SOAP 1.1 / WSDL ══▶  IBM ACE
+                                  │                            │  DFDL
+                                  │                            ▼
+                                  │                    ISO 8583 over TCP
+                                  │                            │
+                                  ◀════ SOAP response ═════ the switch
+```
+
+One SOAP hop, exactly at the ACE boundary. Everything north of it is
+REST/JSON; everything south is binary ISO 8583.
+
+## Start here
+
+```bash
+make install          # local venv
+make test             # every suite
+make up               # the whole platform: 9 services, 3 datastores
+make smoke            # end-to-end purchase from outside
+```
+
+`make smoke` drives a real purchase through the entire path and asserts on
+what comes back — including that a retry landing on a *different* gateway
+replica returns the cached result instead of charging twice.
+
+## The services
+
+| Service | Port | Owns | Replicas |
+|---|---|---|---|
+| **api-gateway** | 8080 | The only Route. JWT verification, idempotency claims, correlation IDs | 2+ |
+| **auth-service** | 8081 | Users, passwords, JWT issuance. Its own Postgres | 2 |
+| **transaction-service** | 8082 | Saga orchestration, RRN generation, compensation | 2 |
+| **risk-service** | 8083 | Velocity, amount, entry-mode rules. Redis-backed | 2 |
+| **ledger-service** | 8084 | Double-entry ledger. Its own Postgres | 2 |
+| **iso8583-adapter** | 8085 | **REST→SOAP boundary.** PIN blocks, HSM, reversals | **1** |
+| **analytics-sync** | — | CronJob: ledger → ClickHouse | — |
+| *ace-stub* | 8090 | Test double: serves the real WSDL | 1 |
+| *host-simulator* | 9999 | Test double: fake switch | 1 |
+
+**iso8583-adapter runs one replica, deliberately.** Each pod derives PIN keys
+from its own persisted base key, so two replicas hold *different* keys and a
+PIN block encrypted by one cannot be decrypted by the other. Scaling it out
+needs a shared KMS-backed key, not a higher replica count.
+
+## IBM ACE, and why nothing waits for it
+
+The entitlement key had not come through. Rather than leave the riskiest
+integration in the platform untested until the licence landed,
+`services/ace-stub/` implements the **same WSDL** in Python — and it is a
+stand-in, not a mock. It builds real BCD-packed messages with a real bitmap,
+opens a real TCP socket to the switch, and parses the real binary response.
+
+Swapping in the real thing is one environment variable:
+
+```bash
+ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway
+```
+
+No application code changes. Every test is written against the WSDL contract
+rather than against either implementation, so a green run after the swap is
+genuine evidence it worked.
+
+The ACE artifacts — DFDL schema, ESQL, message-flow spec, Dockerfile — are in
+[`ace/`](ace/), with an honest status table for each. See [ace/README.md](ace/README.md).
+
+### The conformance obligation
+
+`ace/Iso8583Library/dfdl/ISO8583.xsd` and
+`libs/mfcommon/mfcommon/iso8583/parser.py` are two independent
+implementations of the same binary format. They will drift unless something
+forces them together. `tests/e2e/test_dfdl_conformance.py` is that forcing
+function — 23 assertions pinning BCD padding, odd-length filler nibbles,
+LLVAR digit-vs-byte counts, bitmap bit positions, and the no-trim rule on
+DE 52 and DE 64.
+
+## What changed from the monolith
+
+The eight layers survive; what changed is everything a network forces you to
+confront.
+
+| Monolith | Here | Why |
+|---|---|---|
+| One function call | Seven HTTP hops | Independent deploys and scaling |
+| Python exception unwinds everything | **Saga with explicit compensation** | No distributed transaction exists |
+| One SQLite file | Postgres per service | Independent schema ownership |
+| One traceback | **Correlation IDs** through every hop, including SOAP | One request is now seven log streams |
+| `switch/client.py` over TCP | **SOAP → ACE → ISO 8583** | Protocol mediation belongs in an ESB |
+| In-process risk state | Redis | Per-pod state makes velocity rules bypassable |
+| Direct function call | Timeouts, selective retries, circuit breakers | A call can now succeed *and* be lost |
+| Redshift (planned) | **ClickHouse** | Self-hostable, so it is actually tested |
+
+### The three-valued outcome
+
+The monolith had approved and declined. This platform has **approved,
+declined, and unknown** — because a network call can succeed while its
+response is lost.
+
+When the switch times out, the money may already have moved. Returning
+"declined" would be a lie that loses a customer's money silently. So
+`iso8583-adapter` returns `outcome="unknown"`, `transaction-service` declines
+to post to the ledger, a reversal is issued, and the transaction is flagged
+`requires_reconciliation`. That state did not exist in the monolith and it is
+the main thing the decomposition costs.
+
+### The one guarantee everything rests on
+
+`PRIMARY KEY (rrn)` on `transactions`. The gateway's idempotency claim, the
+saga's retry policy, the reversal-on-timeout — all of it is best-effort. That
+constraint is enforced by the database in a single atomic statement and holds
+however many replicas race. `services/ledger-service/tests/test_ledger.py`
+proves it with ten threads on a barrier.
+
+## Repository layout
+
+```
+libs/mfcommon/          shared: ISO 8583 codec, SOAP envelopes, JWT, PIN blocks,
+                        correlation IDs, audit masking, resilient HTTP client
+services/<name>/        app/ + tests/ + Dockerfile + requirements.txt
+ace/                    DFDL schema, WSDL, ESQL, flow spec, Dockerfile
+openshift/base/         Deployments, Services, Route, NetworkPolicies, HPAs, CronJobs
+openshift/overlays/     dev and prod kustomize overlays
+tests/e2e/              cross-service and DFDL conformance
+scripts/smoke_test.py   end-to-end drive from outside
+docs/architecture.html  full flows, layers, and API reference
+```
+
+`libs/mfcommon` holds things that must be **byte-identical** across services —
+if the adapter and the stub disagree about BCD padding by one nibble, every
+message corrupts. Business rules deliberately stay out: risk thresholds live
+in risk-service, accounting rules in ledger-service. A shared library that
+accumulates business logic is how a microservice split quietly becomes a
+distributed monolith.
+
+## Deploying
+
+```bash
+make build                              # all nine images
+oc apply -k openshift/overlays/dev
+```
+
+Before prod, read the header of
+[`openshift/overlays/prod/kustomization.yaml`](openshift/overlays/prod/kustomization.yaml).
+Three things must be true: real secrets in place (the base ships a
+*placeholder* Secret so a fresh cluster applies cleanly), `SWITCH_HOST`
+repointed at the real acquirer, and image tags pinned.
+
+Every image handles OpenShift's arbitrary-UID model — `chgrp -R 0` +
+`chmod -R g=u`, packages installed system-wide rather than into a named
+user's home. Getting that wrong surfaces as `executable file not found in
+$PATH`, which is not a permission error and sends you looking in the wrong
+place entirely.
+
+## Known gaps
+
+Stated plainly rather than discovered later:
+
+1. **No MAC on outbound messages.** DE 64/128 are modelled and masked but never
+   generated. Most real switches require one.
+2. **DE 90 uses placeholder institution IDs** in reversals. The simulator only
+   needs MTI and STAN; a real switch will want the genuine values echoed.
+3. **No RBAC.** `/internal/ledger/reset` is config-gated, not
+   authorization-gated. Any authenticated user is equivalent to any other.
+4. **`MockHSM` is XOR**, not a real HSM. Same interface, no tamper resistance.
+   Inherited from the monolith and clearly labelled there too.
+5. **Plaintext PIN crosses one internal hop** — gateway to adapter. Mitigated by
+   a NetworkPolicy; a real PCI environment wants mTLS there.
+6. **RRN collision is possible** — 10 digits of epoch seconds plus 2 random
+   means a 1-in-100 chance within the same second. The ledger's PRIMARY KEY
+   turns a collision into a rejected duplicate rather than corrupted money,
+   but the format should change before real volume.

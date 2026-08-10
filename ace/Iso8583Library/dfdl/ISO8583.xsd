@@ -1,0 +1,451 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ISO 8583 DFDL model for IBM App Connect Enterprise.
+
+  DFDL (Data Format Description Language) lets ACE parse a binary wire format
+  into a logical message tree, and serialize it back, from a declarative
+  schema instead of hand-written code. This file is what replaces
+  mfcommon/iso8583/parser.py at runtime once ACE takes over.
+
+  ============================================================
+  THIS FILE HAS A CONFORMANCE OBLIGATION
+  ============================================================
+  Two independent implementations of a binary wire format WILL drift unless
+  something forces them together. The Python codec in
+  libs/mfcommon/mfcommon/iso8583/parser.py is the executable specification;
+  this schema must produce byte-identical output for the same logical
+  message. tests/e2e/test_dfdl_conformance.py is the forcing function.
+
+  If you change padding, length-prefix encoding, or which fields are binary
+  in parser.py, THIS FILE IS NOW WRONG.
+
+  ============================================================
+  HOW THE BITMAP IS MODELLED, AND WHY IT LOOKS LIKE THIS
+  ============================================================
+  An ISO 8583 bitmap is 8 bytes where each BIT says whether the corresponding
+  data element is present. Bit 1 set means a second 8-byte bitmap follows,
+  covering DE 65-128.
+
+  DFDL 1.0 has no bitwise operators, so you cannot mask a byte to test a bit.
+  The idiomatic solution -- and the one IBM's own ISO 8583 samples use -- is
+  to model the bitmap as sixty-four SEPARATE ONE-BIT ELEMENTS via
+  dfdl:lengthUnits="bits" and dfdl:length="1". Each then holds 0 or 1
+  directly, and a field's presence becomes:
+
+      dfdl:occursCountKind="expression"
+      dfdl:occursCount="{ ../PrimaryBitmap/Bit2 }"
+
+  which is readable and needs no arithmetic. It is verbose -- 64 declarations
+  for something a single byte-mask would express in C -- but it is correct,
+  and DFDL's verbosity here buys a schema that ACE can both parse AND
+  serialize from, which hand-written ESQL could not.
+
+  ============================================================
+  BCD, AND THE ODD-LENGTH RULE
+  ============================================================
+  Numeric fields are packed two decimal digits per byte (binaryNumberRep
+  "bcd"). An odd-length numeric value gets a trailing 'F' nibble as filler.
+  That choice is VENDOR-SPECIFIC -- some processors pad leading instead --
+  and it is documented in parser.py's bcd_encode(). Both sides must agree or
+  every odd-length field shifts by one nibble and the rest of the message
+  is garbage.
+-->
+<xs:schema
+    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns:dfdl="http://www.ogf.org/dfdl/dfdl-1.0/"
+    xmlns:iso="urn:microfinance:iso8583:dfdl:v1"
+    targetNamespace="urn:microfinance:iso8583:dfdl:v1"
+    elementFormDefault="qualified">
+
+  <xs:annotation>
+    <xs:appinfo source="http://www.ogf.org/dfdl/">
+      <dfdl:defineFormat name="Iso8583Format">
+        <dfdl:format
+            byteOrder="bigEndian"
+            representation="binary"
+            binaryNumberRep="binary"
+            lengthKind="explicit"
+            lengthUnits="bytes"
+            encoding="ISO-8859-1"
+            initiator="" terminator="" separator=""
+            leadingSkip="0" trailingSkip="0"
+            alignment="1" alignmentUnits="bytes"
+            initiatedContent="no"
+            sequenceKind="ordered"
+            occursCountKind="implicit"
+            ignoreCase="no"
+            textPadKind="none" textTrimKind="none"
+            truncateSpecifiedLengthString="no"
+            escapeSchemeRef=""
+            emptyValueDelimiterPolicy="none"
+            floating="no"
+            documentFinalTerminatorCanBeMissing="yes"
+            encodingErrorPolicy="replace"/>
+      </dfdl:defineFormat>
+      <!-- ISO-8859-1 (latin-1) is a byte-for-byte mapping of 0x00-0xFF onto
+           U+0000-U+00FF. That makes it a LOSSLESS carrier for binary content
+           in a text-typed field, which is exactly how DE 52's PIN block and
+           the MAC fields survive. Any other encoding (UTF-8 especially)
+           silently re-encodes bytes above 0x7F into two bytes and corrupts
+           them. parser.py makes the same choice for the same reason. -->
+      <dfdl:format ref="iso:Iso8583Format"/>
+    </xs:appinfo>
+  </xs:annotation>
+
+  <!-- ==================================================================
+       Reusable simple types
+       ================================================================== -->
+
+  <!-- One bit of a bitmap. Value is literally 0 or 1, so it can be used
+       directly as an occursCount without any conversion. -->
+  <xs:simpleType name="BitmapBit" dfdl:lengthKind="explicit"
+                 dfdl:length="1" dfdl:lengthUnits="bits"
+                 dfdl:binaryNumberRep="binary">
+    <xs:restriction base="xs:unsignedInt"/>
+  </xs:simpleType>
+
+  <!-- ==================================================================
+       The message
+       ================================================================== -->
+
+  <xs:element name="ISO8583Message" dfdl:lengthKind="implicit">
+    <xs:complexType>
+      <xs:sequence dfdl:sequenceKind="ordered">
+
+        <!-- MTI: 4 decimal digits packed BCD into 2 bytes. "0200" -> 0x02 0x00 -->
+        <xs:element name="MTI" type="xs:string"
+                    dfdl:lengthKind="explicit" dfdl:length="2"
+                    dfdl:representation="binary" dfdl:binaryNumberRep="bcd"/>
+
+        <!-- Primary bitmap: DE 1-64, one element per bit.
+             Bit1 is NOT a data element -- it is the "secondary bitmap
+             follows" flag, which is why there is no DE 1 below. -->
+        <xs:element name="PrimaryBitmap" dfdl:lengthKind="implicit">
+          <xs:complexType>
+            <xs:sequence dfdl:sequenceKind="ordered">
+              <xs:element name="Bit1"  type="iso:BitmapBit"/>
+              <xs:element name="Bit2"  type="iso:BitmapBit"/>
+              <xs:element name="Bit3"  type="iso:BitmapBit"/>
+              <xs:element name="Bit4"  type="iso:BitmapBit"/>
+              <xs:element name="Bit5"  type="iso:BitmapBit"/>
+              <xs:element name="Bit6"  type="iso:BitmapBit"/>
+              <xs:element name="Bit7"  type="iso:BitmapBit"/>
+              <xs:element name="Bit8"  type="iso:BitmapBit"/>
+              <xs:element name="Bit9"  type="iso:BitmapBit"/>
+              <xs:element name="Bit10" type="iso:BitmapBit"/>
+              <xs:element name="Bit11" type="iso:BitmapBit"/>
+              <xs:element name="Bit12" type="iso:BitmapBit"/>
+              <xs:element name="Bit13" type="iso:BitmapBit"/>
+              <xs:element name="Bit14" type="iso:BitmapBit"/>
+              <xs:element name="Bit15" type="iso:BitmapBit"/>
+              <xs:element name="Bit16" type="iso:BitmapBit"/>
+              <xs:element name="Bit17" type="iso:BitmapBit"/>
+              <xs:element name="Bit18" type="iso:BitmapBit"/>
+              <xs:element name="Bit19" type="iso:BitmapBit"/>
+              <xs:element name="Bit20" type="iso:BitmapBit"/>
+              <xs:element name="Bit21" type="iso:BitmapBit"/>
+              <xs:element name="Bit22" type="iso:BitmapBit"/>
+              <xs:element name="Bit23" type="iso:BitmapBit"/>
+              <xs:element name="Bit24" type="iso:BitmapBit"/>
+              <xs:element name="Bit25" type="iso:BitmapBit"/>
+              <xs:element name="Bit26" type="iso:BitmapBit"/>
+              <xs:element name="Bit27" type="iso:BitmapBit"/>
+              <xs:element name="Bit28" type="iso:BitmapBit"/>
+              <xs:element name="Bit29" type="iso:BitmapBit"/>
+              <xs:element name="Bit30" type="iso:BitmapBit"/>
+              <xs:element name="Bit31" type="iso:BitmapBit"/>
+              <xs:element name="Bit32" type="iso:BitmapBit"/>
+              <xs:element name="Bit33" type="iso:BitmapBit"/>
+              <xs:element name="Bit34" type="iso:BitmapBit"/>
+              <xs:element name="Bit35" type="iso:BitmapBit"/>
+              <xs:element name="Bit36" type="iso:BitmapBit"/>
+              <xs:element name="Bit37" type="iso:BitmapBit"/>
+              <xs:element name="Bit38" type="iso:BitmapBit"/>
+              <xs:element name="Bit39" type="iso:BitmapBit"/>
+              <xs:element name="Bit40" type="iso:BitmapBit"/>
+              <xs:element name="Bit41" type="iso:BitmapBit"/>
+              <xs:element name="Bit42" type="iso:BitmapBit"/>
+              <xs:element name="Bit43" type="iso:BitmapBit"/>
+              <xs:element name="Bit44" type="iso:BitmapBit"/>
+              <xs:element name="Bit45" type="iso:BitmapBit"/>
+              <xs:element name="Bit46" type="iso:BitmapBit"/>
+              <xs:element name="Bit47" type="iso:BitmapBit"/>
+              <xs:element name="Bit48" type="iso:BitmapBit"/>
+              <xs:element name="Bit49" type="iso:BitmapBit"/>
+              <xs:element name="Bit50" type="iso:BitmapBit"/>
+              <xs:element name="Bit51" type="iso:BitmapBit"/>
+              <xs:element name="Bit52" type="iso:BitmapBit"/>
+              <xs:element name="Bit53" type="iso:BitmapBit"/>
+              <xs:element name="Bit54" type="iso:BitmapBit"/>
+              <xs:element name="Bit55" type="iso:BitmapBit"/>
+              <xs:element name="Bit56" type="iso:BitmapBit"/>
+              <xs:element name="Bit57" type="iso:BitmapBit"/>
+              <xs:element name="Bit58" type="iso:BitmapBit"/>
+              <xs:element name="Bit59" type="iso:BitmapBit"/>
+              <xs:element name="Bit60" type="iso:BitmapBit"/>
+              <xs:element name="Bit61" type="iso:BitmapBit"/>
+              <xs:element name="Bit62" type="iso:BitmapBit"/>
+              <xs:element name="Bit63" type="iso:BitmapBit"/>
+              <xs:element name="Bit64" type="iso:BitmapBit"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Secondary bitmap: DE 65-128. Present only when Bit1 is set.
+             occursCount reads Bit1 directly -- 1 occurrence or 0. -->
+        <xs:element name="SecondaryBitmap" minOccurs="0" maxOccurs="1"
+                    dfdl:lengthKind="implicit"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit1 }">
+          <xs:complexType>
+            <xs:sequence dfdl:sequenceKind="ordered">
+              <!-- Modelled as 8 raw bytes rather than 64 bit elements,
+                   because only DE 103 is used from this range and expanding
+                   all 64 would add 64 declarations for one field. Extend to
+                   individual bits if you start using more of DE 65-128. -->
+              <xs:element name="Bits65to128" type="xs:hexBinary"
+                          dfdl:lengthKind="explicit" dfdl:length="8"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- ============================================================
+             Data elements, in ascending order.
+             Order is mandatory: ISO 8583 has no field tags on the wire, so
+             position IS identity. A field emitted out of order shifts every
+             subsequent field and corrupts the whole message.
+             ============================================================ -->
+
+        <!-- DE 2, PAN. LLVAR: a 1-byte BCD length prefix (2 digits) giving
+             the DIGIT count, then that many digits packed BCD.
+             Note the length is in DIGITS, not bytes -- 16 digits occupy 8
+             bytes. Getting this wrong is the single most common ISO 8583
+             parsing bug. -->
+        <xs:element name="DE002_PAN" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit2 }"
+                    dfdl:lengthKind="implicit">
+          <xs:complexType>
+            <xs:sequence dfdl:sequenceKind="ordered">
+              <xs:element name="LL" type="xs:unsignedInt"
+                          dfdl:lengthKind="explicit" dfdl:length="1"
+                          dfdl:binaryNumberRep="bcd"/>
+              <xs:element name="Value" type="xs:string"
+                          dfdl:lengthKind="explicit"
+                          dfdl:lengthUnits="bytes"
+                          dfdl:length="{ xs:unsignedInt(fn:ceiling(../iso:LL div 2)) }"
+                          dfdl:binaryNumberRep="bcd"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- DE 3, processing code. FIXED 6 digits -> 3 bytes BCD. -->
+        <xs:element name="DE003_ProcessingCode" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit3 }"
+                    dfdl:lengthKind="explicit" dfdl:length="3"
+                    dfdl:binaryNumberRep="bcd"/>
+
+        <!-- DE 4, amount. FIXED 12 digits -> 6 bytes BCD. -->
+        <xs:element name="DE004_Amount" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit4 }"
+                    dfdl:lengthKind="explicit" dfdl:length="6"
+                    dfdl:binaryNumberRep="bcd"/>
+
+        <!-- DE 7, transmission date/time MMDDhhmmss. 10 digits -> 5 bytes. -->
+        <xs:element name="DE007_TransmissionDateTime" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit7 }"
+                    dfdl:lengthKind="explicit" dfdl:length="5"
+                    dfdl:binaryNumberRep="bcd"/>
+
+        <!-- DE 11, STAN. 6 digits -> 3 bytes. -->
+        <xs:element name="DE011_STAN" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit11 }"
+                    dfdl:lengthKind="explicit" dfdl:length="3"
+                    dfdl:binaryNumberRep="bcd"/>
+
+        <!-- DE 12, local time hhmmss. -->
+        <xs:element name="DE012_LocalTime" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit12 }"
+                    dfdl:lengthKind="explicit" dfdl:length="3"
+                    dfdl:binaryNumberRep="bcd"/>
+
+        <!-- DE 13, local date MMDD. -->
+        <xs:element name="DE013_LocalDate" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit13 }"
+                    dfdl:lengthKind="explicit" dfdl:length="2"
+                    dfdl:binaryNumberRep="bcd"/>
+
+        <!-- DE 22, POS entry mode. 3 digits -> 2 bytes (odd length: trailing
+             'F' filler nibble, per parser.py's bcd_encode). -->
+        <xs:element name="DE022_EntryMode" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit22 }"
+                    dfdl:lengthKind="explicit" dfdl:length="2"
+                    dfdl:binaryNumberRep="bcd"/>
+
+        <!-- DE 32, acquiring institution ID. LLVAR numeric. -->
+        <xs:element name="DE032_AcquirerId" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit32 }"
+                    dfdl:lengthKind="implicit">
+          <xs:complexType>
+            <xs:sequence dfdl:sequenceKind="ordered">
+              <xs:element name="LL" type="xs:unsignedInt"
+                          dfdl:lengthKind="explicit" dfdl:length="1"
+                          dfdl:binaryNumberRep="bcd"/>
+              <xs:element name="Value" type="xs:string"
+                          dfdl:lengthKind="explicit"
+                          dfdl:length="{ xs:unsignedInt(fn:ceiling(../iso:LL div 2)) }"
+                          dfdl:binaryNumberRep="bcd"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- DE 37, RRN. FIXED 12 characters, ASCII TEXT not BCD -- the
+             standard types it 'an' (alphanumeric), so 12 characters occupy
+             12 bytes, not 6. -->
+        <xs:element name="DE037_RRN" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit37 }"
+                    dfdl:lengthKind="explicit" dfdl:length="12"
+                    dfdl:representation="text" dfdl:textPadKind="padChar"
+                    dfdl:textStringPadCharacter="%SP;" dfdl:textTrimKind="padChar"/>
+
+        <!-- DE 38, authorization ID response. 6 characters, text. -->
+        <xs:element name="DE038_AuthId" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit38 }"
+                    dfdl:lengthKind="explicit" dfdl:length="6"
+                    dfdl:representation="text" dfdl:textPadKind="padChar"
+                    dfdl:textStringPadCharacter="%SP;" dfdl:textTrimKind="padChar"/>
+
+        <!-- DE 39, response code. 2 characters, text. The field the whole
+             platform branches on. -->
+        <xs:element name="DE039_ResponseCode" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit39 }"
+                    dfdl:lengthKind="explicit" dfdl:length="2"
+                    dfdl:representation="text"/>
+
+        <!-- DE 41, terminal ID. 8 characters, text. -->
+        <xs:element name="DE041_TerminalId" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit41 }"
+                    dfdl:lengthKind="explicit" dfdl:length="8"
+                    dfdl:representation="text" dfdl:textPadKind="padChar"
+                    dfdl:textStringPadCharacter="%SP;" dfdl:textTrimKind="padChar"/>
+
+        <!-- DE 42, merchant ID. 15 characters, text. -->
+        <xs:element name="DE042_MerchantId" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit42 }"
+                    dfdl:lengthKind="explicit" dfdl:length="15"
+                    dfdl:representation="text" dfdl:textPadKind="padChar"
+                    dfdl:textStringPadCharacter="%SP;" dfdl:textTrimKind="padChar"/>
+
+        <!-- DE 43, card acceptor name/location. 40 characters, space padded.
+             This one is genuinely space-padded TEXT, so trimming is CORRECT
+             here -- unlike DE 52/64, below. -->
+        <xs:element name="DE043_CardAcceptor" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit43 }"
+                    dfdl:lengthKind="explicit" dfdl:length="40"
+                    dfdl:representation="text" dfdl:textPadKind="padChar"
+                    dfdl:textStringPadCharacter="%SP;" dfdl:textTrimKind="padChar"/>
+
+        <!-- DE 48, additional data, private use. LLLVAR: 2-byte BCD length
+             prefix (4 digits) giving a BYTE count, then that many bytes. -->
+        <xs:element name="DE048_AdditionalData" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit48 }"
+                    dfdl:lengthKind="implicit">
+          <xs:complexType>
+            <xs:sequence dfdl:sequenceKind="ordered">
+              <xs:element name="LLL" type="xs:unsignedInt"
+                          dfdl:lengthKind="explicit" dfdl:length="2"
+                          dfdl:binaryNumberRep="bcd"/>
+              <xs:element name="Value" type="xs:string"
+                          dfdl:lengthKind="explicit" dfdl:length="{ ../iso:LLL }"
+                          dfdl:representation="text"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- DE 49, transaction currency code. 3 digits -> 2 bytes BCD. -->
+        <xs:element name="DE049_CurrencyCode" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit49 }"
+                    dfdl:lengthKind="explicit" dfdl:length="2"
+                    dfdl:binaryNumberRep="bcd"/>
+
+        <!-- DE 52, PIN block. FIXED 8 bytes of GENUINELY BINARY content.
+
+             textTrimKind is "none", and that is not an oversight. An
+             encrypted PIN block is 8 bytes of ciphertext that may
+             coincidentally end in 0x20 or another byte that decodes to
+             whitespace. Trimming it would silently remove real key material,
+             corrupting roughly one PIN block in every few hundred -- rare
+             enough to survive testing and reach production.
+
+             The Python codec carries a dedicated `binary` flag on FieldSpec
+             for exactly this, and the monolith's README documents finding
+             the bug via a genuinely flaky test. Same trap, same fix, both
+             implementations. -->
+        <xs:element name="DE052_PinBlock" type="xs:hexBinary" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit52 }"
+                    dfdl:lengthKind="explicit" dfdl:length="8"
+                    dfdl:textTrimKind="none"/>
+
+        <!-- DE 53, security related control information. 16 digits -> 8
+             bytes BCD. Carries the KSN the receiver needs to re-derive the
+             per-transaction PIN key. -->
+        <xs:element name="DE053_SecurityControl" type="xs:string" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit53 }"
+                    dfdl:lengthKind="explicit" dfdl:length="8"
+                    dfdl:binaryNumberRep="bcd"/>
+
+        <!-- DE 64, MAC. 8 binary bytes. Same no-trim rule as DE 52. -->
+        <xs:element name="DE064_MAC" type="xs:hexBinary" minOccurs="0"
+                    dfdl:occursCountKind="expression"
+                    dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit64 }"
+                    dfdl:lengthKind="explicit" dfdl:length="8"
+                    dfdl:textTrimKind="none"/>
+
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ==================================================================
+       MLI-framed stream
+       ==================================================================
+       Real switches do not send bare messages. Each is preceded by a
+       2-byte big-endian length header (MLI, Message Length Indicator),
+       because TCP is a byte stream with no message boundaries of its own.
+
+       ACE's TCPIPClientInput/Output nodes can handle this framing
+       themselves, but modelling it here means the same schema can also
+       parse a captured raw socket dump -- which is what you will want the
+       first time production behaves differently from the simulator.
+  -->
+  <xs:element name="ISO8583Framed" dfdl:lengthKind="implicit">
+    <xs:complexType>
+      <xs:sequence dfdl:sequenceKind="ordered">
+        <xs:element name="MessageLength" type="xs:unsignedInt"
+                    dfdl:lengthKind="explicit" dfdl:length="2"
+                    dfdl:binaryNumberRep="binary"/>
+        <xs:element ref="iso:ISO8583Message"
+                    dfdl:lengthKind="explicit"
+                    dfdl:length="{ ../iso:MessageLength }"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

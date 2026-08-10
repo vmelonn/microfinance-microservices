@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mfcommon"
+version = "1.0.0"
+description = "Shared primitives for the microfinance microservices platform"
+requires-python = ">=3.11"
+dependencies = []
+
+# Deliberately zero runtime dependencies. Every service already pulls in
+# FastAPI/httpx/redis for its own reasons; this library must never be the
+# reason a service gains a dependency it wouldn't otherwise need. Anything
+# that needs a third-party package (the SOAP client's httpx use, for
+# instance) imports it lazily inside the function that needs it.
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mfcommon*"]

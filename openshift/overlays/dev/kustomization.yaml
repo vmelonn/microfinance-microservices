@@ -1,0 +1,84 @@
+# Dev overlay -- small, chatty, and deliberately destructible.
+#
+#     oc apply -k openshift/overlays/dev
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: microfinance-dev
+namePrefix: ""
+
+resources:
+  - ../../base
+
+commonLabels:
+  app.kubernetes.io/environment: dev
+
+# One replica of everything. Dev exists to exercise correctness, not
+# concurrency, and two replicas of nine services on a shared cluster is a
+# lot of scheduling for no extra signal.
+#
+# The exception worth knowing: with api-gateway at one replica, the
+# cross-replica idempotency behaviour is NOT being exercised here. That is
+# what docker-compose runs two gateways for, and what tests/e2e covers.
+replicas:
+  - {name: api-gateway, count: 1}
+  - {name: auth-service, count: 1}
+  - {name: transaction-service, count: 1}
+  - {name: risk-service, count: 1}
+  - {name: ledger-service, count: 1}
+
+configMapGenerator:
+  - name: microfinance-config
+    behavior: merge
+    literals:
+      - LOG_LEVEL=DEBUG
+      # Tighter velocity thresholds so the risk paths are reachable by hand
+      # without scripting twenty requests.
+      - RISK_VELOCITY_DECLINE_COUNT=3
+      - RISK_VELOCITY_REVIEW_COUNT=2
+
+patches:
+  # Enable the ledger wipe endpoint. Dev only, and absent from the base
+  # precisely so it cannot reach production by being forgotten.
+  - target: {kind: Deployment, name: ledger-service}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: ALLOW_LEDGER_RESET, value: "1"}
+
+  # Ephemeral HSM key. No PVC in dev, so the base key regenerates on every
+  # restart -- fine when nothing persists across a redeploy anyway, and it
+  # keeps dev from holding a volume it does not need.
+  - target: {kind: Deployment, name: iso8583-adapter}
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/containers/0/volumeMounts/1
+      - op: remove
+        path: /spec/template/spec/volumes/1
+
+  # Autoscaling off. An HPA fighting a fixed replica count produces
+  # confusing churn in an environment nobody is load-testing.
+  - target: {kind: HorizontalPodAutoscaler, name: api-gateway}
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 2
+  - target: {kind: HorizontalPodAutoscaler, name: transaction-service}
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 2
+
+  # Sync every 15 minutes instead of hourly, so analytics changes are
+  # observable within a working session.
+  - target: {kind: CronJob, name: analytics-sync}
+    patch: |-
+      - op: replace
+        path: /spec/schedule
+        value: "*/15 * * * *"

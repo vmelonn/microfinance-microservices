@@ -1,0 +1,177 @@
+"""
+End-to-end smoke test against a running platform.
+
+    docker compose up --build
+    python scripts/smoke_test.py
+
+Drives the full path from outside, exactly as a mobile client would:
+
+    REST -> api-gateway -> auth / risk / ledger -> iso8583-adapter
+         -> SOAP -> ace-stub -> ISO 8583 over TCP -> host-simulator
+         -> back up the same way
+
+Uses only the standard library, so it runs with no install.
+"""
+
+import json
+import sys
+import urllib.error
+import urllib.request
+import uuid
+
+GATEWAY_1 = "http://localhost:8080"
+GATEWAY_2 = "http://localhost:8081"   # the second replica
+
+PASS, FAIL = "  PASS", "  FAIL"
+failures = []
+
+
+def call(base, method, path, body=None, token=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            return response.status, json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        try:
+            return exc.code, json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            return exc.code, {"raw": raw.decode(errors="replace")}
+    except urllib.error.URLError as exc:
+        return 0, {"error": str(exc)}
+
+
+def check(label, condition, detail=""):
+    print(f"{PASS if condition else FAIL}  {label}" + (f"  -- {detail}" if detail and not condition else ""))
+    if not condition:
+        failures.append(label)
+
+
+def register(base):
+    cnic = str(uuid.uuid4().int)[:13]
+    card = "4" + str(uuid.uuid4().int)[:15]
+    password = "a-real-password-123"
+
+    status, body = call(base, "POST", "/users/register", {
+        "full_name": "Smoke Test", "cnic": cnic, "bind_card_number": card, "password": password,
+    })
+    if status != 200:
+        print(f"{FAIL}  registration failed: {status} {body}")
+        sys.exit(1)
+
+    status, token_body = call(base, "POST", "/auth/login", {"cnic": cnic, "password": password})
+    if status != 200:
+        print(f"{FAIL}  login failed: {status} {token_body}")
+        sys.exit(1)
+
+    return token_body["access_token"], card, body["account_id"]
+
+
+def main():
+    print("\n=== 0. the platform is up ===")
+    status, _ = call(GATEWAY_1, "GET", "/health")
+    if status != 200:
+        print(f"{FAIL}  api-gateway is not responding on {GATEWAY_1}. Run: docker compose up --build")
+        sys.exit(1)
+    check("api-gateway healthy", True)
+
+    status, ready = call(GATEWAY_1, "GET", "/ready")
+    check("api-gateway ready", status == 200, json.dumps(ready))
+
+    print("\n=== 1. register a merchant, so purchases have somewhere to credit ===")
+    merchant_cnic = str(uuid.uuid4().int)[:13]
+    status, _ = call(GATEWAY_1, "POST", "/users/register", {
+        "full_name": "Demo Merchant", "cnic": merchant_cnic,
+        "bind_card_number": "merchant:demo", "password": "merchant-password-1",
+    })
+    check("merchant registered", status in (200, 409), "409 is fine -- already exists")
+
+    print("\n=== 2. register a cardholder and log in ===")
+    token, card, account_id = register(GATEWAY_1)
+    check("registered and authenticated", bool(token), "")
+    print(f"        card={card[:6]}...{card[-4:]}  account={account_id}")
+
+    print("\n=== 3. purchase: REST -> SOAP -> ISO 8583 -> SOAP -> REST ===")
+    key = f"smoke-{uuid.uuid4().hex[:12]}"
+    purchase = {"amount": 25.50, "card_number": card, "pin": "1234", "idempotency_key": key}
+
+    status, result = call(GATEWAY_1, "POST", "/transactions/purchase", purchase, token=token)
+    check("purchase approved", status == 200 and result.get("status") == "approved",
+          f"{status} {json.dumps(result)}")
+    check("RRN returned", bool(result.get("rrn")), json.dumps(result))
+    check("posted to the ledger", result.get("ledger_status") == "recorded", json.dumps(result))
+    print(f"        rrn={result.get('rrn')}  stan={result.get('stan')}  auth={result.get('authorization_id')}")
+
+    print("\n=== 4. the debit actually landed ===")
+    status, balance = call(GATEWAY_1, "GET", f"/accounts/{card}/balance", token=token)
+    check("balance reflects the debit", status == 200 and balance.get("balance_cents") == -2550,
+          json.dumps(balance))
+
+    print("\n=== 5. idempotency: same key, DIFFERENT replica ===")
+    # Replica 2 has never seen this request. Only shared Redis state can make
+    # it return the identical result rather than charging a second time.
+    status, replay = call(GATEWAY_2, "POST", "/transactions/purchase", purchase, token=token)
+    check("replica 2 returned the cached result", status == 200 and replay.get("rrn") == result.get("rrn"),
+          f"{status} {json.dumps(replay)}")
+
+    status, balance_after = call(GATEWAY_1, "GET", f"/accounts/{card}/balance", token=token)
+    check("balance UNCHANGED after the replay", balance_after.get("balance_cents") == -2550,
+          f"charged twice: {json.dumps(balance_after)}")
+
+    print("\n=== 6. same key, different body, must be rejected ===")
+    tampered = dict(purchase, amount=999.00)
+    status, _ = call(GATEWAY_1, "POST", "/transactions/purchase", tampered, token=token)
+    check("idempotency key reuse rejected", status == 400, f"got {status}")
+
+    print("\n=== 7. risk velocity escalates ACROSS replicas ===")
+    velocity_token, velocity_card, _ = register(GATEWAY_1)
+    outcomes = []
+    for i in range(7):
+        target = GATEWAY_1 if i % 2 == 0 else GATEWAY_2   # alternate every attempt
+        _, body = call(target, "POST", "/transactions/purchase", {
+            "amount": 5.00, "card_number": velocity_card, "pin": "1234",
+            "idempotency_key": f"vel-{uuid.uuid4().hex[:12]}",
+        }, token=velocity_token)
+        outcomes.append(body.get("status"))
+    print(f"        {' -> '.join(str(o) for o in outcomes)}")
+    check("velocity escalated despite alternating replicas",
+          any(o in ("review", "decline") for o in outcomes),
+          "shared velocity state is NOT working")
+
+    print("\n=== 8. authorization: you cannot spend from someone else's card ===")
+    other_token, _other_card, _ = register(GATEWAY_1)
+    status, _ = call(GATEWAY_1, "POST", "/transactions/purchase", {
+        "amount": 10.00, "card_number": card, "pin": "1234",   # the FIRST user's card
+        "idempotency_key": f"authz-{uuid.uuid4().hex[:12]}",
+    }, token=other_token)
+    check("cross-account spend refused", status == 403, f"got {status}")
+
+    print("\n=== 9. an unregistered card is refused ===")
+    status, _ = call(GATEWAY_1, "POST", "/transactions/purchase", {
+        "amount": 10.00, "card_number": "4000000000009999", "pin": "1234",
+        "idempotency_key": f"unknown-{uuid.uuid4().hex[:12]}",
+    }, token=token)
+    check("unknown card refused", status == 404, f"got {status}")
+
+    print("\n=== 10. no token, no transaction ===")
+    status, _ = call(GATEWAY_1, "POST", "/transactions/purchase", purchase)
+    check("unauthenticated request refused", status == 401, f"got {status}")
+
+    print()
+    if failures:
+        print(f"{len(failures)} check(s) FAILED:")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+
+    print("All smoke checks passed.")
+    print("REST -> SOAP -> ISO 8583 -> SOAP -> REST works end to end.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

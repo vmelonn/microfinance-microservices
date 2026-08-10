@@ -1,0 +1,284 @@
+---
+# Redis -- shared idempotency claims and risk velocity windows.
+#
+# Deployment, not StatefulSet, and NO persistence. Deliberate: everything in
+# here is short-lived derived state with a TTL. Idempotency claims expire in
+# 24h and velocity windows in 60s, so a Redis restart loses at most a day of
+# replay protection and a minute of velocity history. Adding an AOF file to
+# protect that would buy very little and cost a PVC, fsync latency on the hot
+# path, and a restore step.
+#
+# What a restart DOES mean: for up to 24 hours afterwards, a retried request
+# whose claim was lost is treated as new. The ledger's PRIMARY KEY (rrn) is
+# the backstop that keeps this from double-posting -- which is exactly why
+# that constraint, and not this cache, is where correctness lives.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels: {app.kubernetes.io/name: redis, app.kubernetes.io/part-of: microfinance}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: redis}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: redis, app.kubernetes.io/part-of: microfinance}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args:
+            - redis-server
+            - --save
+            - ""                 # no RDB snapshots
+            - --appendonly
+            - "no"
+            - --maxmemory
+            - 256mb
+            # allkeys-lru, not noeviction. Under memory pressure, evicting the
+            # least-recently-used claim degrades replay protection; refusing
+            # writes would make every transaction fail outright.
+            - --maxmemory-policy
+            - allkeys-lru
+          ports: [{containerPort: 6379, name: redis}]
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 320Mi}   # above maxmemory, leaving overhead room
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          livenessProbe:
+            exec: {command: [redis-cli, ping]}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            exec: {command: [redis-cli, ping]}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels: {app.kubernetes.io/name: redis}
+spec:
+  selector: {app.kubernetes.io/name: redis}
+  ports: [{port: 6379, targetPort: 6379, name: redis}]
+
+---
+# Postgres -- the operational database for auth-service and ledger-service.
+#
+# StatefulSet with a PVC, because this holds money and losing it is not
+# recoverable from anywhere else in the platform.
+#
+# ONE server, TWO logical databases. Database-per-service is about ownership
+# -- who may migrate a schema, who breaks when a column changes -- not about
+# process count. Splitting into two StatefulSets is a config change here and
+# a DSN change in two Deployments, and is the right move the moment either
+# service's load or backup schedule diverges from the other's.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels: {app.kubernetes.io/name: postgres, app.kubernetes.io/part-of: microfinance}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: postgres}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: postgres, app.kubernetes.io/part-of: microfinance}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 26              # the postgres UID in the official image
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: microfinance
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: microfinance-secrets, key: POSTGRES_PASSWORD}
+            # The official image refuses to initialise into a non-empty
+            # directory, and a mounted PVC always contains lost+found. This
+            # subdirectory is the documented way around it.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports: [{containerPort: 5432, name: postgres}]
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          livenessProbe:
+            exec: {command: [pg_isready, -U, microfinance]}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            exec: {command: [pg_isready, -U, microfinance]}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 5Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels: {app.kubernetes.io/name: postgres}
+spec:
+  selector: {app.kubernetes.io/name: postgres}
+  ports: [{port: 5432, targetPort: 5432, name: postgres}]
+
+---
+# ClickHouse -- the analytics warehouse.
+#
+# Replaces the originally-planned AWS Redshift. Self-hosted, so it needs no
+# cloud account and no credentials, and the code that talks to it is
+# genuinely exercised by CI instead of being correct-shaped and untestable.
+#
+# SINGLE NODE. ReplicatedMergeTree plus ClickHouse Keeper is the documented
+# growth path, not day-one work: replication here would triple the storage
+# cost to protect data that can be fully rebuilt from the ledger by rerunning
+# the sync with an empty watermark. The operational database is the system of
+# record; this is a derived store.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  labels: {app.kubernetes.io/name: clickhouse, app.kubernetes.io/part-of: microfinance}
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: clickhouse}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: clickhouse, app.kubernetes.io/part-of: microfinance}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 101             # the clickhouse UID in the official image
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24-alpine
+          env:
+            - {name: CLICKHOUSE_DB, value: analytics}
+            - {name: CLICKHOUSE_USER, value: default}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: microfinance-secrets, key: CLICKHOUSE_PASSWORD}
+          ports:
+            - {containerPort: 8123, name: http}      # what clickhouse-connect uses
+            - {containerPort: 9000, name: native}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/clickhouse}
+          # ClickHouse is memory-hungry by design -- it buffers inserts and
+          # holds mark caches. Starving it produces MEMORY_LIMIT_EXCEEDED on
+          # queries that would otherwise be trivial, so the request is
+          # deliberately well above the application services'.
+          resources:
+            requests: {cpu: 200m, memory: 1Gi}
+            limits: {memory: 3Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          livenessProbe:
+            httpGet: {path: /ping, port: 8123}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /ping, port: 8123}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 20Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  labels: {app.kubernetes.io/name: clickhouse}
+spec:
+  selector: {app.kubernetes.io/name: clickhouse}
+  ports:
+    - {port: 8123, targetPort: 8123, name: http}
+    - {port: 9000, targetPort: 9000, name: native}
+
+---
+# host-simulator -- the fake switch.
+#
+# Deployed in dev and test namespaces ONLY. The prod overlay deletes this
+# Deployment and repoints ace-stub's SWITCH_HOST at the acquirer's real
+# endpoint. Nothing else in the platform can tell the difference, which is
+# what makes the test environment worth trusting.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: host-simulator
+  labels: {app.kubernetes.io/name: host-simulator, app.kubernetes.io/part-of: microfinance}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: host-simulator}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: host-simulator, app.kubernetes.io/part-of: microfinance}
+    spec:
+      serviceAccountName: microfinance
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: host-simulator
+          image: host-simulator:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: SIMULATOR_HOST, value: "0.0.0.0"}
+            - {name: SIMULATOR_PORT, value: "9999"}
+          ports: [{containerPort: 9999, name: iso8583}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          # A TCP probe, because this speaks raw sockets and has no HTTP
+          # endpoint to hit.
+          livenessProbe:
+            tcpSocket: {port: 9999}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket: {port: 9999}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: host-simulator
+  labels: {app.kubernetes.io/name: host-simulator}
+spec:
+  selector: {app.kubernetes.io/name: host-simulator}
+  ports: [{port: 9999, targetPort: 9999, name: iso8583}]
