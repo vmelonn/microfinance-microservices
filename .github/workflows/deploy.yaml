@@ -1,4 +1,4 @@
-name: OpenShift CI/CD Pipeline
+name: OpenShift CI/CD Multi-Job Pipeline
 
 on:
   push:
@@ -6,10 +6,9 @@ on:
       - main
 
 jobs:
-  deploy-and-test:
-    name: Deploy to OpenShift and Run Smoke Test
+  setup-infrastructure:
+    name: 1. Setup Infrastructure
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -31,43 +30,81 @@ jobs:
 
       - name: Patch YAMLs for OpenShift Security Constraints
         run: |
-          # Strip out hardcoded Linux groups and users that OpenShift blocks
           find openshift/ -type f -name "*.yaml" -exec sed -i '/fsGroup:/d' {} +
           find openshift/ -type f -name "*.yaml" -exec sed -i '/runAsUser:/d' {} +
 
       - name: Apply Kubernetes Configurations
-        run: |
-          oc apply -k openshift/overlays/dev
+        run: oc apply -k openshift/overlays/dev
 
-      - name: Ensure Infrastructure is Ready (Databases & Volumes)
+      - name: Initialize Databases & Volumes
         run: |
-          echo "Waiting for PostgreSQL to start..."
-          oc rollout status statefulset/postgres --timeout=3m
-          
-          echo "Creating missing databases if they don't exist..."
+          oc rollout status statefulset/postgres --timeout=3m || true
           oc exec postgres-0 -- sh -c 'psql -U $POSTGRES_USER -c "CREATE DATABASE auth;"' || true
           oc exec postgres-0 -- sh -c 'psql -U $POSTGRES_USER -c "CREATE DATABASE ledger;"' || true
-          
-          echo "Attaching HSM storage volume to ISO8583 adapter..."
           oc set volume deployment/iso8583-adapter --add --name=hsm-storage --type=emptyDir --mount-path=/var/hsm --overwrite || true
 
-      - name: Trigger Builds and Wait
+  build-services:
+    name: 2. Build Services
+    needs: setup-infrastructure
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [api-gateway, auth-service, ledger-service, iso8583-adapter, risk-service, transaction-service]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install OpenShift CLI (oc)
+        run: |
+          curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz -o oc.tar.gz
+          tar -xzf oc.tar.gz
+          sudo mv oc /usr/local/bin/
+          rm -f oc.tar.gz README.md
+
+      - name: Log in to OpenShift
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
+          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
+          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
+          insecure_skip_tls_verify: true
+
+      - name: Start Build (Parallel)
+        run: oc start-build ${{ matrix.service }} --follow
+
+  deploy-and-test:
+    name: 3. Rollout & Smoke Test
+    needs: build-services
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install OpenShift CLI (oc)
+        run: |
+          curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz -o oc.tar.gz
+          tar -xzf oc.tar.gz
+          sudo mv oc /usr/local/bin/
+          rm -f oc.tar.gz README.md
+
+      - name: Log in to OpenShift
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
+          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
+          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
+          insecure_skip_tls_verify: true
+
+      - name: Rollout Deployments
         run: |
           for svc in api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service; do
-            echo "Starting build for $svc..."
-            oc start-build $svc --follow
-          done
-          
-          echo "All builds complete. Waiting for rollouts to complete..."
-          for svc in api-gateway auth-service ledger-service iso8583-adapter risk-service transaction-service; do
+            oc rollout restart deployment/$svc
             oc rollout status deployment/$svc --timeout=3m
           done
 
       - name: Run End-to-End Smoke Test
         run: |
-          echo "Injecting smoke test into the API Gateway..."
           GATEWAY_POD=$(oc get pods -l app.kubernetes.io/name=api-gateway -o jsonpath='{.items[0].metadata.name}')
           ROUTE_URL="https://$(oc get route api-gateway -o jsonpath='{.spec.host}')"
-          
           oc cp scripts/smoke_test.py $GATEWAY_POD:/tmp/smoke_test.py
           oc exec $GATEWAY_POD -- python /tmp/smoke_test.py --base "$ROUTE_URL"
