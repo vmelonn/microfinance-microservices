@@ -248,14 +248,30 @@ from it, so every image is traceable to a commit:
 oc describe bc/api-gateway | grep -i 'commit\|ref'
 ```
 
-`oc new-app <repo> --context-dir=services/api-gateway` is the obvious
-one-liner and it does **not** work here: `--context-dir` sets the build
-context *and* the Dockerfile location together, so the build would run with
-`services/api-gateway/` as its root — and every Dockerfile needs the
-repository root as context, because each image installs `libs/mfcommon` as a
-real package. What's needed is `contextDir` unset with `dockerfilePath`
-pointing into the subdirectory, which has no `oc new-app` flag. Hence the
-declared BuildConfigs.
+#### Why not the console's "Import from Git", or `oc new-app`?
+
+**You can use Import from Git for the builds** — set *Context dir* to `/` and
+*Dockerfile path* to `services/<name>/Dockerfile`. Both must be set: every
+Dockerfile needs the **repository root** as its build context, because each
+image installs `libs/mfcommon` as a real package. Pointing the context at
+`services/<name>/` builds a tree with no `libs/` in it and the build fails on
+the `COPY`.
+
+`oc new-app --context-dir=…` genuinely cannot express this — that one flag
+sets the context *and* the Dockerfile location together, and there is no
+`--dockerfile-path` to separate them. The console form has the two as
+separate fields.
+
+**What neither generates is the deployment topology.** Import from Git
+creates a Deployment, a Service, and a Route *per application*. This platform
+needs exactly one Route — `ledger-service` and `iso8583-adapter` reachable
+from the internet is a real problem, not a cosmetic one — plus
+NetworkPolicies, two CronJobs, a PVC for the HSM key, the ConfigMap and
+Secret, and the single-replica pin on the adapter.
+
+So: use the console for builds if you prefer clicking, then `oc apply -k` for
+the deploy. Or skip the nine wizard runs and apply `build.yaml`, which is the
+same nine builds in one command.
 
 ### Rebuilding after a change
 
