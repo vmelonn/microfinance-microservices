@@ -28,6 +28,7 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
 
 from mfcommon.observability.audit import mask_pan
+from mfcommon.observability import trace
 from mfcommon.observability.correlation import (
     CORRELATION_HEADER,
     configure_logging,
@@ -50,11 +51,31 @@ CONFIG = dict(
     manual_entry_review_cents=int(os.environ.get("RISK_MANUAL_ENTRY_REVIEW_CENTS", "50000")),
 )
 
+TRACE_REDIS_URL = os.environ.get("REDIS_URL")
+
 log = configure_logging("risk-service", os.environ.get("LOG_LEVEL", "INFO"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Optional request tracing. A no-op without REDIS_URL, so local runs and
+    # tests pay nothing and behave identically. Wrapped because tracing is a
+    # debug aid and must never stop a service starting.
+    if TRACE_REDIS_URL:
+        try:
+            import redis as _redis
+
+            _tc = _redis.Redis.from_url(TRACE_REDIS_URL)
+            _tc.ping()
+            trace.configure(_tc, "risk-service")
+            app.state.trace_redis = _tc
+            log.info("request tracing enabled")
+        except Exception as exc:  # noqa: BLE001
+            app.state.trace_redis = None
+            log.warning(f"tracing disabled, Redis unreachable: {exc}")
+    else:
+        app.state.trace_redis = None
+
     if REDIS_URL:
         import redis
 

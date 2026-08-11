@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Microfinance Console</title>
+<style>
+  /* Same visual language as docs/architecture.html: mono as the display
+     face, because a fixed-width positional wire format deserves it. Petrol
+     for the integration boundary, copper for anything genuinely binary. */
+  :root {
+    --ground:#F1F4F6; --surface:#FFF; --sunk:#E6ECEF; --rule:#D0D9DF;
+    --ink:#14202A; --soft:#52626F; --faint:#7D8C99;
+    --accent:#1F6F8B; --accent-sunk:#E0EDF2;
+    --iso:#B4531A; --iso-sunk:#F6EAE1;
+    --ok:#2E7D5B; --ok-sunk:#E4F0EA;
+    --warn:#A8761C; --warn-sunk:#F7EEDC;
+    --crit:#B03A3A; --crit-sunk:#F7E6E6;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,"Segoe UI",Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme=light]) {
+      --ground:#0E151B; --surface:#161F28; --sunk:#1C2731; --rule:#2A3742;
+      --ink:#E3E9EE; --soft:#92A1AF; --faint:#6A7A88;
+      --accent:#58AEC9; --accent-sunk:#14252C;
+      --iso:#E88B4D; --iso-sunk:#2A1F17;
+      --ok:#5CBF92; --ok-sunk:#15251E;
+      --warn:#D9A94E; --warn-sunk:#262015;
+      --crit:#E07A7A; --crit-sunk:#271A1A;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+       font-size:14px;line-height:1.55}
+  header{border-bottom:2px solid var(--ink);padding:1rem clamp(1rem,3vw,2rem);
+         display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap}
+  header h1{font-family:var(--mono);font-size:1.1rem;margin:0;letter-spacing:-.02em}
+  header .env{font-family:var(--mono);font-size:.75rem;color:var(--faint)}
+  header .who{margin-left:auto;font-family:var(--mono);font-size:.75rem;color:var(--soft)}
+
+  nav.tabs{display:flex;gap:0;border-bottom:1px solid var(--rule);
+           padding:0 clamp(1rem,3vw,2rem);background:var(--surface);overflow-x:auto}
+  nav.tabs button{background:none;border:0;border-bottom:2px solid transparent;
+    font-family:var(--mono);font-size:.82rem;color:var(--soft);padding:.7rem 1rem;
+    cursor:pointer;white-space:nowrap}
+  nav.tabs button[aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent)}
+  nav.tabs button:hover{color:var(--ink)}
+
+  main{padding:clamp(1rem,3vw,2rem);max-width:1500px;margin:0 auto}
+  .panel{display:none}
+  .panel[data-active]{display:block}
+  .grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(330px,1fr))}
+  .card{background:var(--surface);border:1px solid var(--rule);padding:1rem}
+  .card h2{font-family:var(--mono);font-size:.85rem;margin:0 0 .8rem;
+           text-transform:uppercase;letter-spacing:.08em;color:var(--soft)}
+  label{display:block;font-family:var(--mono);font-size:.72rem;color:var(--soft);
+        margin:.6rem 0 .2rem;text-transform:uppercase;letter-spacing:.05em}
+  input,select,textarea{width:100%;padding:.45rem .6rem;font-family:var(--mono);
+    font-size:.85rem;background:var(--ground);color:var(--ink);
+    border:1px solid var(--rule);border-radius:2px}
+  textarea{resize:vertical;min-height:5rem}
+  button.go{font-family:var(--mono);font-size:.82rem;padding:.5rem 1rem;cursor:pointer;
+    background:var(--accent);color:var(--surface);border:0;border-radius:2px;margin-top:.8rem}
+  button.go:hover{filter:brightness(1.1)}
+  button.go:disabled{opacity:.45;cursor:not-allowed}
+  button.ghost{background:none;color:var(--accent);border:1px solid var(--rule)}
+  .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end}
+  .row>*{flex:1;min-width:110px}
+  .row button.go{flex:0 0 auto}
+
+  .pill{display:inline-block;font-family:var(--mono);font-size:.7rem;padding:.12rem .5rem;
+        border-radius:2px;letter-spacing:.04em}
+  .pill.approved{background:var(--ok-sunk);color:var(--ok)}
+  .pill.declined,.pill.decline{background:var(--crit-sunk);color:var(--crit)}
+  .pill.review,.pill.unknown{background:var(--warn-sunk);color:var(--warn)}
+  .pill.error{background:var(--crit-sunk);color:var(--crit)}
+
+  pre{font-family:var(--mono);font-size:.76rem;background:var(--ground);
+      border:1px solid var(--rule);padding:.7rem;overflow:auto;max-height:22rem;margin:.6rem 0 0}
+  table{border-collapse:collapse;width:100%;font-size:.76rem;font-family:var(--mono)}
+  th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid var(--rule);
+        white-space:nowrap}
+  th{background:var(--sunk);color:var(--soft);position:sticky;top:0;
+     text-transform:uppercase;font-size:.68rem;letter-spacing:.05em}
+  .scroll{overflow:auto;max-height:26rem;border:1px solid var(--rule);background:var(--surface)}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+
+  /* Trace timeline. The stage colour is the point: you can see at a glance
+     where a request was when it stopped. */
+  .ev{display:grid;grid-template-columns:4.2rem 6.5rem 1fr;gap:.6rem;
+      padding:.4rem .5rem;border-bottom:1px solid var(--rule);font-size:.78rem;
+      align-items:baseline}
+  .ev:hover{background:var(--sunk)}
+  .ev .t{font-family:var(--mono);color:var(--faint);text-align:right;
+         font-variant-numeric:tabular-nums}
+  .ev .stage{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;
+             letter-spacing:.05em;padding:.1rem .35rem;border-radius:2px;text-align:center}
+  .stage-gateway{background:var(--accent-sunk);color:var(--accent)}
+  .stage-risk{background:var(--warn-sunk);color:var(--warn)}
+  .stage-saga{background:var(--sunk);color:var(--soft)}
+  .stage-security{background:var(--iso-sunk);color:var(--iso)}
+  .stage-soap{background:var(--accent-sunk);color:var(--accent)}
+  .stage-iso8583,.stage-switch{background:var(--iso-sunk);color:var(--iso)}
+  .stage-ledger{background:var(--ok-sunk);color:var(--ok)}
+  .ev.warn .msg{color:var(--warn)}
+  .ev.error .msg{color:var(--crit)}
+  .ev .detail{font-family:var(--mono);font-size:.7rem;color:var(--faint);
+              display:block;margin-top:.1rem;white-space:pre-wrap;word-break:break-word}
+  .muted{color:var(--faint);font-size:.8rem}
+  .bar{height:5px;background:var(--sunk);border-radius:3px;overflow:hidden;margin-top:.3rem}
+  .bar>span{display:block;height:100%;background:var(--accent)}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:.15rem .8rem;font-family:var(--mono);
+      font-size:.78rem;margin-top:.5rem}
+  .kv dt{color:var(--faint)}
+  .kv dd{margin:0}
+  .err{background:var(--crit-sunk);color:var(--crit);border-left:3px solid var(--crit);
+       padding:.5rem .7rem;font-family:var(--mono);font-size:.75rem;margin-top:.6rem}
+  .note{background:var(--accent-sunk);border-left:3px solid var(--accent);
+        padding:.5rem .7rem;font-size:.78rem;margin-top:.7rem;color:var(--soft)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>microfinance console</h1>
+  <span class="env" id="env">checking...</span>
+  <span class="who" id="who">not signed in</span>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" aria-selected="true"  data-tab="app">Wallet</button>
+  <button role="tab" aria-selected="false" data-tab="trace">Live trace</button>
+  <button role="tab" aria-selected="false" data-tab="db">Database</button>
+  <button role="tab" aria-selected="false" data-tab="load">Load test</button>
+</nav>
+
+<main>
+
+<!-- ============================ WALLET ============================ -->
+<section class="panel" data-tab="app" data-active>
+  <div class="grid">
+
+    <div class="card">
+      <h2>1. Account</h2>
+      <label for="cnic">CNIC (13 digits)</label>
+      <input id="cnic" maxlength="13" placeholder="auto-generated">
+      <label for="pw">Password</label>
+      <input id="pw" type="password" value="a-real-password-123">
+      <div class="row">
+        <button class="go" id="btn-register">Register new</button>
+        <button class="go ghost" id="btn-login">Log in</button>
+      </div>
+      <dl class="kv" id="session-kv"></dl>
+      <div class="note" id="merchant-note" hidden>
+        A merchant must exist before any purchase can be credited.
+        <button class="go ghost" id="btn-merchant" style="margin-top:.5rem">
+          Register merchant:demo
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2. Pay</h2>
+      <label for="card">Card number</label>
+      <input id="card" placeholder="register first">
+      <div class="row">
+        <div><label for="amt">Amount</label><input id="amt" type="number" step="0.01" value="25.50"></div>
+        <div><label for="pin">PIN</label><input id="pin" value="1234" maxlength="12"></div>
+        <div><label for="entry">Entry mode</label>
+          <select id="entry">
+            <option value="05">05 chip</option>
+            <option value="07">07 contactless</option>
+            <option value="01">01 manual key</option>
+          </select>
+        </div>
+      </div>
+      <label for="idem">Idempotency key</label>
+      <div class="row">
+        <input id="idem">
+        <button class="go ghost" id="btn-newkey">New</button>
+      </div>
+      <div class="note">
+        Pay twice with the <strong>same</strong> key to see the cached reply and
+        an unchanged balance. That is the guarantee, not a caching detail.
+      </div>
+      <button class="go" id="btn-pay">Pay</button>
+    </div>
+
+    <div class="card">
+      <h2>3. Result</h2>
+      <div id="result"><p class="muted">No transaction yet.</p></div>
+      <button class="go ghost" id="btn-balance" style="margin-top:.6rem">Check balance</button>
+      <div id="balance"></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ TRACE ============================ -->
+<section class="panel" data-tab="trace">
+  <div class="grid" style="grid-template-columns:minmax(260px,1fr) minmax(420px,2.2fr)">
+
+    <div class="card">
+      <h2>Recent requests</h2>
+      <button class="go ghost" id="btn-refresh-traces">Refresh</button>
+      <div class="scroll" style="margin-top:.6rem;max-height:30rem">
+        <table><tbody id="trace-list"></tbody></table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Timeline</h2>
+      <div class="row">
+        <input id="cid" placeholder="correlation id">
+        <button class="go" id="btn-load-trace">Load</button>
+      </div>
+      <div id="trace-meta" class="muted" style="margin-top:.6rem">
+        Make a payment on the Wallet tab, then come back. Every hop reports
+        itself: gateway, risk, the PIN block, the SOAP call, the switch, the
+        ledger.
+      </div>
+      <div class="scroll" style="margin-top:.6rem;max-height:34rem">
+        <div id="timeline"></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ DATABASE ============================ -->
+<section class="panel" data-tab="db">
+  <div class="grid" style="grid-template-columns:1fr">
+
+    <div class="card">
+      <h2>Operational ledger (live, Postgres)</h2>
+      <div class="row">
+        <button class="go ghost" id="btn-accounts">Accounts</button>
+        <button class="go ghost" id="btn-txns">Transactions</button>
+        <button class="go ghost" id="btn-integrity">Check it balances</button>
+      </div>
+      <div id="ledger-out" class="scroll" style="margin-top:.7rem"></div>
+    </div>
+
+    <div class="card">
+      <h2>Analytics (ClickHouse, read-only SQL)</h2>
+      <div class="note">
+        Free-form SQL runs against <strong>ClickHouse</strong>, never the ledger.
+        ClickHouse is derived and can be rebuilt from Postgres, so a bad query
+        costs nothing. It also lags the ledger by up to the sync interval.
+      </div>
+      <label for="sql">Query</label>
+      <textarea id="sql">SELECT * FROM fact_transactions FINAL ORDER BY transaction_ts DESC LIMIT 20</textarea>
+      <div class="row">
+        <select id="sql-examples"><option value="">examples...</option></select>
+        <button class="go" id="btn-query">Run</button>
+      </div>
+      <div id="query-out"></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ LOAD ============================ -->
+<section class="panel" data-tab="load">
+  <div class="grid" style="grid-template-columns:minmax(280px,1fr) minmax(420px,2fr)">
+
+    <div class="card">
+      <h2>Burst</h2>
+      <div class="note">
+        A browser is a poor load generator: about six connections per origin.
+        This is enough to watch risk escalate, latency spread and the HPA
+        react. For real capacity numbers use Locust from a terminal.
+      </div>
+      <div class="row">
+        <div><label for="ld-total">Requests</label><input id="ld-total" type="number" value="30" min="1" max="300"></div>
+        <div><label for="ld-conc">Concurrency</label><input id="ld-conc" type="number" value="5" min="1" max="20"></div>
+      </div>
+      <label for="ld-mode">Scenario</label>
+      <select id="ld-mode">
+        <option value="fresh">One card each, measures the happy path</option>
+        <option value="same">One shared card, triggers velocity rules</option>
+        <option value="balance">Balance reads only, skips the switch</option>
+      </select>
+      <div class="note" id="ld-explain"></div>
+      <button class="go" id="btn-load">Run burst</button>
+      <button class="go ghost" id="btn-load-stop" disabled>Stop</button>
+    </div>
+
+    <div class="card">
+      <h2>Results</h2>
+      <div class="bar"><span id="ld-bar" style="width:0"></span></div>
+      <div id="ld-summary" class="muted" style="margin-top:.6rem">Not started.</div>
+      <div id="ld-outcomes"></div>
+      <div id="ld-latency"></div>
+    </div>
+
+  </div>
+</section>
+
+</main>
+
+<script>
+"use strict";
+
+const S = { token:null, userId:null, card:null, cnic:null, lastKey:null, lastCid:null, stop:false };
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const cents = c => (c/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
+
+async function api(method, path, body) {
+  const headers = {"Content-Type":"application/json"};
+  if (S.token) headers.Authorization = `Bearer ${S.token}`;
+  const res = await fetch(path, {method, headers, body: body ? JSON.stringify(body) : undefined});
+  // The gateway echoes the correlation ID it minted. That is what ties this
+  // response to the timeline on the trace tab.
+  const cid = res.headers.get("X-Correlation-ID");
+  if (cid) S.lastCid = cid;
+  let data = null;
+  try { data = await res.json(); } catch { data = {raw: await res.text()}; }
+  return {status: res.status, data, cid};
+}
+
+/* ---------------------------------- tabs --------------------------------- */
+document.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav.tabs button").forEach(x => x.setAttribute("aria-selected", x===b));
+  document.querySelectorAll(".panel").forEach(p =>
+    p.dataset.tab === b.dataset.tab ? p.setAttribute("data-active","") : p.removeAttribute("data-active"));
+  if (b.dataset.tab === "trace") loadTraceList();
+});
+
+/* --------------------------------- wallet -------------------------------- */
+const newKey = () => $("idem").value = "ui-" + Math.random().toString(36).slice(2,12);
+$("btn-newkey").onclick = newKey;
+newKey();
+
+function renderSession() {
+  $("session-kv").innerHTML = S.token
+    ? `<dt>user</dt><dd>${esc(S.userId)}</dd><dt>card</dt><dd>${esc(S.card||"-")}</dd>`
+    : "";
+  $("who").textContent = S.token ? `signed in ${S.userId}` : "not signed in";
+}
+
+$("btn-register").onclick = async () => {
+  const cnic = $("cnic").value.trim() || String(Date.now()).padStart(13,"0").slice(-13);
+  const card = "4" + String(Date.now()).slice(-9) + Math.floor(Math.random()*1e6);
+  $("cnic").value = cnic;
+  const r = await api("POST","/users/register",
+    {full_name:"Console User", cnic, bind_card_number:card, password:$("pw").value});
+  if (r.status !== 200) return showResult(r);
+  S.cnic = cnic; S.card = card; $("card").value = card;
+  await doLogin(cnic);
+};
+
+$("btn-login").onclick = () => doLogin($("cnic").value.trim());
+
+async function doLogin(cnic) {
+  const r = await api("POST","/auth/login",{cnic, password:$("pw").value});
+  if (r.status !== 200) return showResult(r);
+  S.token = r.data.access_token; S.userId = r.data.user_id;
+  renderSession();
+  checkMerchant();
+}
+
+async function checkMerchant() {
+  const r = await api("GET", `/accounts/merchant:demo/balance`);
+  // 404 means the merchant is not registered; 403 means it exists but is not
+  // ours, which is fine, a purchase only needs it to exist.
+  $("merchant-note").hidden = r.status !== 404;
+}
+
+$("btn-merchant").onclick = async () => {
+  const r = await api("POST","/users/register",{
+    full_name:"Demo Merchant", cnic:String(Date.now()+1).slice(-13),
+    bind_card_number:"merchant:demo", password:"merchant-password-1"});
+  $("merchant-note").hidden = (r.status === 200 || r.status === 409);
+};
+
+$("btn-pay").onclick = async () => {
+  if (!S.token) return showResult({status:0, data:{detail:"Register or log in first."}});
+  $("btn-pay").disabled = true;
+  const t0 = performance.now();
+  const r = await api("POST","/transactions/purchase",{
+    amount: parseFloat($("amt").value),
+    card_number: $("card").value.trim(),
+    pin: $("pin").value,
+    idempotency_key: $("idem").value,
+    entry_mode: $("entry").value,
+  });
+  showResult(r, Math.round(performance.now()-t0));
+  $("btn-pay").disabled = false;
+};
+
+function showResult(r, ms) {
+  const d = r.data || {};
+  const status = d.status || (r.status >= 400 ? "error" : "?");
+  const cls = ["approved","declined","review","decline","unknown"].includes(status) ? status : "error";
+  let html = `<span class="pill ${cls}">${esc(status)}</span>`;
+  if (ms != null) html += ` <span class="muted">${ms} ms</span>`;
+  if (d.reason) html += `<p style="margin:.5rem 0 0">${esc(d.reason)}</p>`;
+  if (d.detail) html += `<div class="err">${esc(typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail))}</div>`;
+
+  if (status === "unknown") html +=
+    `<div class="err">Outcome UNDETERMINED. The switch may have moved money.
+     Nothing was written to the ledger and a reversal was sent.</div>`;
+
+  const kv = [["rrn",d.rrn],["stan",d.stan],["auth id",d.authorization_id],
+              ["ledger",d.ledger_status],["correlation",r.cid]].filter(x => x[1]);
+  if (kv.length) html += `<dl class="kv">${kv.map(([k,v]) =>
+    `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
+  if (r.cid) html += `<button class="go ghost" onclick="jumpToTrace('${esc(r.cid)}')"
+                        style="margin-top:.6rem">View trace</button>`;
+  html += `<pre>${esc(JSON.stringify(d,null,2))}</pre>`;
+  $("result").innerHTML = html;
+}
+
+window.jumpToTrace = cid => {
+  document.querySelector('nav.tabs button[data-tab=trace]').click();
+  $("cid").value = cid;
+  loadTrace(cid);
+};
+
+$("btn-balance").onclick = async () => {
+  const r = await api("GET", `/accounts/${encodeURIComponent($("card").value.trim())}/balance`);
+  $("balance").innerHTML = r.status === 200
+    ? `<dl class="kv"><dt>balance</dt><dd>${cents(r.data.balance_cents)}</dd>
+       <dt>account</dt><dd>${esc(r.data.account_id)}</dd></dl>`
+    : `<div class="err">${esc(JSON.stringify(r.data))}</div>`;
+};
+
+/* --------------------------------- traces -------------------------------- */
+async function loadTraceList() {
+  const r = await api("GET","/console/traces");
+  const rows = (r.data.traces || []);
+  $("trace-list").innerHTML = rows.length ? rows.map(t =>
+    `<tr style="cursor:pointer" onclick="jumpToTrace('${esc(t.correlation_id)}')">
+       <td>${esc(t.summary || t.correlation_id)}</td>
+       <td class="muted">${esc(t.correlation_id.slice(0,12))}</td></tr>`).join("")
+    : `<tr><td class="muted">${esc(r.data.reason || "No traces yet.")}</td></tr>`;
+}
+$("btn-refresh-traces").onclick = loadTraceList;
+$("btn-load-trace").onclick = () => loadTrace($("cid").value.trim());
+
+async function loadTrace(cid) {
+  if (!cid) return;
+  const r = await api("GET", `/console/traces/${encodeURIComponent(cid)}`);
+  if (r.status !== 200) {
+    $("trace-meta").innerHTML = `<div class="err">${esc(r.data.detail || "not found")}</div>`;
+    $("timeline").innerHTML = ""; return;
+  }
+  const ev = r.data.events;
+  $("trace-meta").innerHTML =
+    `<span class="pill approved">${ev.length} events</span>
+     <span class="muted">${r.data.total_ms} ms end to end &middot; ${esc(cid)}</span>`;
+  $("timeline").innerHTML = ev.map(e => {
+    const detail = Object.keys(e.detail||{}).length
+      ? `<span class="detail">${esc(JSON.stringify(e.detail))}</span>` : "";
+    return `<div class="ev ${esc(e.level)}">
+      <span class="t">${e.offset_ms} ms</span>
+      <span class="stage stage-${esc(e.stage)}">${esc(e.stage)}</span>
+      <span><span class="msg">${esc(e.event)}</span>${detail}
+        <span class="detail">${esc(e.service)}</span></span></div>`;
+  }).join("");
+}
+
+/* -------------------------------- database ------------------------------- */
+function renderTable(el, cols, rows) {
+  if (!rows.length) { el.innerHTML = `<p class="muted" style="padding:.6rem">No rows.</p>`; return; }
+  el.innerHTML = `<table><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(r=>`<tr>${cols.map(c=>{
+      const v = Array.isArray(r) ? r[cols.indexOf(c)] : r[c];
+      const num = typeof v === "number";
+      return `<td class="${num?"num":""}">${esc(v)}</td>`;}).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+$("btn-accounts").onclick = async () => {
+  const r = await api("GET","/console/ledger/accounts");
+  const rows = (r.data.accounts||[]).map(a => ({...a, balance: cents(a.balance_cents)}));
+  renderTable($("ledger-out"), ["account_id","user_id","type","cards","balance","created_at"], rows);
+};
+$("btn-txns").onclick = async () => {
+  const r = await api("GET","/console/ledger/transactions?limit=50");
+  const rows = (r.data.transactions||[]).map(t => ({...t, amount: cents(t.amount_cents)}));
+  renderTable($("ledger-out"), ["rrn","amount","kind","debit_account_id","credit_account_id","created_at"], rows);
+};
+$("btn-integrity").onclick = async () => {
+  const r = await api("GET","/console/ledger/integrity");
+  const ok = r.data.balanced;
+  $("ledger-out").innerHTML = `<div style="padding:.7rem">
+    <span class="pill ${ok?"approved":"declined"}">${ok?"balances":"DOES NOT BALANCE"}</span>
+    <p class="muted" style="margin:.5rem 0 0">Total debits ${ok?"equal":"do NOT equal"} total credits.
+    ${ok?"":"Stop and investigate; do not retry."}</p></div>`;
+};
+
+$("btn-query").onclick = async () => {
+  $("btn-query").disabled = true;
+  const r = await api("POST","/console/query",{sql:$("sql").value});
+  if (r.status !== 200) {
+    $("query-out").innerHTML = `<div class="err">${esc(r.data.detail || JSON.stringify(r.data))}</div>`;
+  } else {
+    const d = r.data;
+    $("query-out").innerHTML =
+      `<p class="muted" style="margin:.6rem 0 .3rem">${d.row_count} rows in ${d.elapsed_ms} ms</p>
+       <div class="scroll" id="qtable"></div>`;
+    renderTable($("qtable"), d.columns, d.rows);
+  }
+  $("btn-query").disabled = false;
+};
+
+(async () => {
+  const r = await api("GET","/console/query/schema");
+  if (r.status !== 200) return;
+  const sel = $("sql-examples");
+  (r.data.examples||[]).forEach(q => sel.add(new Option(q.slice(0,52), q)));
+  sel.onchange = () => { if (sel.value) $("sql").value = sel.value; };
+})();
+
+/* -------------------------------- load test ------------------------------ */
+const EXPLAIN = {
+  fresh:"Registers a card per request. Measures the real transaction path without risk interference.",
+  same:"Reuses one card, so the sliding window fills and you should see approved turn into review then decline.",
+  balance:"Reads only. Never reaches the adapter or the switch, so it scales very differently.",
+};
+$("ld-mode").onchange = () => $("ld-explain").textContent = EXPLAIN[$("ld-mode").value];
+$("ld-explain").textContent = EXPLAIN.fresh;
+
+$("btn-load-stop").onclick = () => { S.stop = true; };
+
+$("btn-load").onclick = async () => {
+  if (!S.token) { $("ld-summary").innerHTML = `<div class="err">Register or log in first.</div>`; return; }
+  const total = +$("ld-total").value, conc = +$("ld-conc").value, mode = $("ld-mode").value;
+  S.stop = false;
+  $("btn-load").disabled = true; $("btn-load-stop").disabled = false;
+
+  const results = [], t0 = performance.now();
+  let issued = 0;
+
+  async function one() {
+    const started = performance.now();
+    let out;
+    if (mode === "balance") {
+      const r = await api("GET", `/accounts/${encodeURIComponent(S.card)}/balance`);
+      out = r.status === 200 ? "ok" : "error";
+    } else {
+      const r = await api("POST","/transactions/purchase",{
+        amount:1.00, card_number:S.card, pin:$("pin").value,
+        idempotency_key:"load-"+Math.random().toString(36).slice(2,14),
+        entry_mode:"05"});
+      out = (r.data && r.data.status) || (r.status>=400 ? "error" : "?");
+    }
+    results.push({ms: performance.now()-started, out});
+    $("ld-bar").style.width = (results.length/total*100) + "%";
+    render();
+  }
+
+  function render() {
+    const lat = results.map(r=>r.ms).sort((a,b)=>a-b);
+    const pct = p => lat.length ? Math.round(lat[Math.min(lat.length-1, Math.floor(lat.length*p))]) : 0;
+    const secs = (performance.now()-t0)/1000;
+    $("ld-summary").innerHTML =
+      `${results.length}/${total} done &middot; ${(results.length/secs).toFixed(1)} req/s`;
+    const counts = {};
+    results.forEach(r => counts[r.out] = (counts[r.out]||0)+1);
+    $("ld-outcomes").innerHTML = Object.entries(counts).map(([k,v]) =>
+      `<span class="pill ${["approved","declined","review","decline","unknown"].includes(k)?k:"error"}"
+        style="margin:.2rem .3rem 0 0">${esc(k)} ${v}</span>`).join("");
+    $("ld-latency").innerHTML = `<dl class="kv">
+      <dt>p50</dt><dd>${pct(.5)} ms</dd>
+      <dt>p95</dt><dd>${pct(.95)} ms</dd>
+      <dt>max</dt><dd>${lat.length?Math.round(lat[lat.length-1]):0} ms</dd></dl>`;
+  }
+
+  // A fixed-size worker pool, rather than firing everything at once. The
+  // browser caps connections per origin anyway, so an unbounded Promise.all
+  // would just queue invisibly and make the latency numbers meaningless.
+  const workers = Array.from({length: Math.min(conc, total)}, async () => {
+    while (issued < total && !S.stop) { issued++; await one(); }
+  });
+  await Promise.all(workers);
+
+  $("btn-load").disabled = false; $("btn-load-stop").disabled = true;
+  $("ld-summary").innerHTML += S.stop ? " &middot; stopped" : " &middot; complete";
+};
+
+/* --------------------------------- startup ------------------------------- */
+(async () => {
+  const r = await fetch("/ready").then(x=>x.json()).catch(()=>null);
+  $("env").textContent = r ? `gateway ${r.status}` : "gateway unreachable";
+})();
+renderSession();
+</script>
+</body>
+</html>

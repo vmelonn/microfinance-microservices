@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 from mfcommon.auth.passwords import hash_password, verify_password
 from mfcommon.auth.tokens import TokenError, create_token, decode_token
 from mfcommon.db.dialect import Database, utc_now_param
+from mfcommon.observability import trace
 from mfcommon.observability.correlation import (
     CORRELATION_HEADER,
     configure_logging,
@@ -49,6 +50,8 @@ TOKEN_LIFETIME = int(os.environ.get("ACCESS_TOKEN_LIFETIME_SECONDS", "3600"))
 
 _DEV_SECRET = "dev-only-insecure-secret-do-not-use-in-production"
 JWT_SECRET = os.environ.get("JWT_SECRET", _DEV_SECRET)
+
+TRACE_REDIS_URL = os.environ.get("REDIS_URL")
 
 log = configure_logging("auth-service", os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -75,6 +78,24 @@ def _init_schema(db: Database) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Optional request tracing. A no-op without REDIS_URL, so local runs and
+    # tests pay nothing and behave identically. Wrapped because tracing is a
+    # debug aid and must never stop a service starting.
+    if TRACE_REDIS_URL:
+        try:
+            import redis as _redis
+
+            _tc = _redis.Redis.from_url(TRACE_REDIS_URL)
+            _tc.ping()
+            trace.configure(_tc, "auth-service")
+            app.state.trace_redis = _tc
+            log.info("request tracing enabled")
+        except Exception as exc:  # noqa: BLE001
+            app.state.trace_redis = None
+            log.warning(f"tracing disabled, Redis unreachable: {exc}")
+    else:
+        app.state.trace_redis = None
+
     db = Database(AUTH_DSN)
     # See the note in ledger-service: wait for the database instead of
     # relying on container restarts to eventually catch it awake.

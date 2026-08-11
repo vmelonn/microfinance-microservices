@@ -269,6 +269,54 @@ class LedgerRepository:
                 for r in cur.fetchall()
             ]
 
+    # -- read-only inspection, for the operator console ---------------------
+    #
+    # Curated rather than an arbitrary SQL endpoint. This is the money
+    # database behind the only public Route, and "it is only SELECT" is not
+    # a safety argument: read-only still leaks, and one typo in a guard turns
+    # it into something worse. Free-form querying is available against
+    # ClickHouse, which is derived and rebuildable.
+
+    def list_accounts(self, limit: int = 100) -> list[dict]:
+        with self.db.cursor() as cur:
+            cur.execute(self.db.sql(f"""
+                SELECT a.account_id, a.user_id, a.type, a.created_at,
+                       (SELECT COUNT(*) FROM cards c WHERE c.account_id = a.account_id) AS cards,
+                       COALESCE((
+                           SELECT SUM(CASE WHEN entry_type='credit' THEN amount_cents
+                                           ELSE -amount_cents END)
+                           FROM ledger_entries e WHERE e.account_id = a.account_id
+                       ), 0) AS balance_cents
+                FROM accounts a
+                ORDER BY a.created_at DESC
+                LIMIT {int(limit)}
+            """))
+            return [
+                {"account_id": r[0], "user_id": r[1], "type": r[2],
+                 "created_at": str(r[3]), "cards": int(r[4]),
+                 "balance_cents": int(r[5])}
+                for r in cur.fetchall()
+            ]
+
+    def list_transactions(self, limit: int = 50) -> list[dict]:
+        """Newest first, with both sides of the journal entry joined on."""
+        with self.db.cursor() as cur:
+            cur.execute(self.db.sql(f"""
+                SELECT t.rrn, t.amount_cents, t.kind, t.created_at,
+                       d.account_id, c.account_id
+                FROM transactions t
+                JOIN ledger_entries d ON d.rrn = t.rrn AND d.entry_type = 'debit'
+                JOIN ledger_entries c ON c.rrn = t.rrn AND c.entry_type = 'credit'
+                ORDER BY t.created_at DESC
+                LIMIT {int(limit)}
+            """))
+            return [
+                {"rrn": r[0], "amount_cents": int(r[1]), "kind": r[2],
+                 "created_at": str(r[3]), "debit_account_id": r[4],
+                 "credit_account_id": r[5]}
+                for r in cur.fetchall()
+            ]
+
     def reset(self) -> None:
         """Sandbox only. Wired to an endpoint that production config disables."""
         with self.db.transaction() as conn:

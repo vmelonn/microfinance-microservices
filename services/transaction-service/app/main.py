@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 
 from mfcommon.http.client import ServiceCallError, ServiceClient, ServiceRejectedError
 from mfcommon.observability.audit import mask_pan
+from mfcommon.observability import trace
 from mfcommon.observability.correlation import (
     CORRELATION_HEADER,
     configure_logging,
@@ -59,11 +60,31 @@ ADAPTER_URL = os.environ.get("ISO8583_ADAPTER_URL", "http://iso8583-adapter:8085
 # modelled concept.
 MERCHANT_IDENTIFIER = os.environ.get("MERCHANT_IDENTIFIER", "merchant:demo")
 
+TRACE_REDIS_URL = os.environ.get("REDIS_URL")
+
 log = configure_logging("transaction-service", os.environ.get("LOG_LEVEL", "INFO"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Optional request tracing. A no-op without REDIS_URL, so local runs and
+    # tests pay nothing and behave identically. Wrapped because tracing is a
+    # debug aid and must never stop a service starting.
+    if TRACE_REDIS_URL:
+        try:
+            import redis as _redis
+
+            _tc = _redis.Redis.from_url(TRACE_REDIS_URL)
+            _tc.ping()
+            trace.configure(_tc, "transaction-service")
+            app.state.trace_redis = _tc
+            log.info("request tracing enabled")
+        except Exception as exc:  # noqa: BLE001
+            app.state.trace_redis = None
+            log.warning(f"tracing disabled, Redis unreachable: {exc}")
+    else:
+        app.state.trace_redis = None
+
     app.state.risk = ServiceClient("risk-service", RISK_URL, timeout=3.0)
     app.state.ledger = ServiceClient("ledger-service", LEDGER_URL, timeout=5.0)
     # The adapter's timeout must EXCEED the switch timeout it wraps,
@@ -171,6 +192,10 @@ def purchase(body: PurchaseRequest, request: Request):
         log.error(f"risk-service unavailable, failing closed: {exc}")
         raise HTTPException(status_code=503, detail="Risk evaluation unavailable; transaction refused.")
 
+    trace.emit("risk", f"risk decision: {decision['outcome']}",
+               {"reasons": decision["reasons"]},
+               level="warn" if decision["outcome"] != "approve" else "info")
+
     if decision["outcome"] in ("decline", "review"):
         reason = "; ".join(decision["reasons"])
         log.warning(f"risk {decision['outcome']} card={mask_pan(body.card_number)}: {reason}")
@@ -178,6 +203,7 @@ def purchase(body: PurchaseRequest, request: Request):
 
     #, Step 3: authorize at the switch. THE POINT OF NO RETURN.
     rrn = _generate_rrn()
+    trace.emit("saga", "RRN generated, entering the point of no return", {"rrn": rrn})
     auth = _authorize(
         state,
         rrn=rrn,

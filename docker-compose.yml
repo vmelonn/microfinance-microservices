@@ -20,6 +20,10 @@ name: microfinance-microservices
 
 x-common-env: &common-env
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # Every service writes trace events here, which is what lets the console
+  # show one request's path across all of them. Best-effort: a service starts
+  # fine without it, tracing simply goes quiet.
+  REDIS_URL: redis://redis:6379/0
   # Every replica MUST share this. A token issued by gateway-1 has to verify
   # on gateway-2, and auth-service has to sign with the same key both read.
   JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-secret-do-not-use-in-production}
@@ -195,7 +199,8 @@ services:
       AUTH_SERVICE_URL: http://auth-service:8081
       TRANSACTION_SERVICE_URL: http://transaction-service:8082
       LEDGER_SERVICE_URL: http://ledger-service:8084
-      REDIS_URL: redis://redis:6379/0
+      ENABLE_CONSOLE: "1"
+      CLICKHOUSE_HOST: clickhouse
     depends_on:
       redis: {condition: service_healthy}
       auth-service: {condition: service_started}

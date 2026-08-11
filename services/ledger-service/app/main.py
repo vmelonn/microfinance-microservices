@@ -24,6 +24,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from mfcommon.db.dialect import Database
+from mfcommon.observability import trace
 from mfcommon.observability.correlation import (
     CORRELATION_HEADER,
     configure_logging,
@@ -35,11 +36,31 @@ from app.repository import LedgerRepository
 LEDGER_DSN = os.environ.get("LEDGER_DSN", "ledger.db")
 ALLOW_RESET = os.environ.get("ALLOW_LEDGER_RESET", "0") == "1"
 
+TRACE_REDIS_URL = os.environ.get("REDIS_URL")
+
 log = configure_logging("ledger-service", os.environ.get("LOG_LEVEL", "INFO"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Optional request tracing. A no-op without REDIS_URL, so local runs and
+    # tests pay nothing and behave identically. Wrapped because tracing is a
+    # debug aid and must never stop a service starting.
+    if TRACE_REDIS_URL:
+        try:
+            import redis as _redis
+
+            _tc = _redis.Redis.from_url(TRACE_REDIS_URL)
+            _tc.ping()
+            trace.configure(_tc, "ledger-service")
+            app.state.trace_redis = _tc
+            log.info("request tracing enabled")
+        except Exception as exc:  # noqa: BLE001
+            app.state.trace_redis = None
+            log.warning(f"tracing disabled, Redis unreachable: {exc}")
+    else:
+        app.state.trace_redis = None
+
     db = Database(LEDGER_DSN)
     # Wait for Postgres rather than crashing when it is not up yet. On a cold
     # namespace the database and this service start together, and failing
@@ -138,6 +159,9 @@ def create_posting(body: PostingRequest, request: Request):
             detail=f"Posting rejected, debit or credit account does not exist: {exc}",
         )
 
+    trace.emit("ledger", f"double-entry posting: {result['status']}",
+               {"rrn": body.rrn, "amount_cents": body.amount_cents,
+                "debit": body.debit_account, "credit": body.credit_account})
     log.info(f"posting rrn={body.rrn} status={result['status']} amount_cents={body.amount_cents}")
     return result
 
@@ -164,6 +188,17 @@ def export(request: Request, since: str | None = None, limit: int = 50_000):
     """Feeds analytics-sync's incremental load."""
     rows = request.app.state.repo.export_since(since, limit)
     return {"rows": rows, "count": len(rows)}
+
+
+@app.get("/internal/ledger/inspect/accounts")
+def inspect_accounts(request: Request, limit: int = 100):
+    """Read-only listing for the operator console."""
+    return {"accounts": request.app.state.repo.list_accounts(min(limit, 500))}
+
+
+@app.get("/internal/ledger/inspect/transactions")
+def inspect_transactions(request: Request, limit: int = 50):
+    return {"transactions": request.app.state.repo.list_transactions(min(limit, 200))}
 
 
 @app.get("/internal/ledger/integrity")

@@ -35,6 +35,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from mfcommon.observability.audit import mask_pan
+from mfcommon.observability import trace
 from mfcommon.observability.correlation import (
     CORRELATION_HEADER,
     configure_logging,
@@ -55,11 +56,31 @@ HSM_MASTER_KEY_HEX = os.environ.get("HSM_MASTER_KEY_HEX")
 
 DEFAULT_CURRENCY = os.environ.get("DEFAULT_CURRENCY_CODE", "840")
 
+TRACE_REDIS_URL = os.environ.get("REDIS_URL")
+
 log = configure_logging("iso8583-adapter", os.environ.get("LOG_LEVEL", "INFO"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Optional request tracing. A no-op without REDIS_URL, so local runs and
+    # tests pay nothing and behave identically. Wrapped because tracing is a
+    # debug aid and must never stop a service starting.
+    if TRACE_REDIS_URL:
+        try:
+            import redis as _redis
+
+            _tc = _redis.Redis.from_url(TRACE_REDIS_URL)
+            _tc.ping()
+            trace.configure(_tc, "iso8583-adapter")
+            app.state.trace_redis = _tc
+            log.info("request tracing enabled")
+        except Exception as exc:  # noqa: BLE001
+            app.state.trace_redis = None
+            log.warning(f"tracing disabled, Redis unreachable: {exc}")
+    else:
+        app.state.trace_redis = None
+
     if HSM_KEY_PATH and HSM_MASTER_KEY_HEX:
         kms = LocalKeyManagementService(master_key=bytes.fromhex(HSM_MASTER_KEY_HEX))
         app.state.hsm = MockHSM(kms=kms, persisted_key_path=HSM_KEY_PATH)
@@ -155,6 +176,10 @@ def authorize(body: AuthorizeRequest, request: Request):
         f"authorize rrn={body.rrn} card={mask_pan(body.card_number)} "
         f"amount_cents={body.amount_cents} pin_present={body.pin is not None}"
     )
+    trace.emit("security", "PIN block built" if pin_block_hex else "no PIN on this request",
+               {"ksn": ksn, "algorithm": "ISO 9564 format 0"})
+    trace.emit("soap", "SOAP authorizeRequest to the ISO 8583 gateway",
+               {"endpoint": SOAP_ENDPOINT, "rrn": body.rrn})
 
     try:
         result = state.soap.authorize(
@@ -221,6 +246,10 @@ def authorize(body: AuthorizeRequest, request: Request):
     response_code = result.get("responseCode", "")
     outcome = "approved" if response_code == "00" else "declined"
 
+    trace.emit("soap", f"SOAP response: {outcome}",
+               {"de39": response_code, "text": result.get("responseText"),
+                "authId": result.get("authId"), "stan": result.get("stan")},
+               level="info" if outcome == "approved" else "warn")
     log.info(f"authorize rrn={body.rrn} -> {outcome} ({response_code} {result.get('responseText')})")
 
     return AuthorizeResponse(

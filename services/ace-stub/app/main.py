@@ -29,6 +29,7 @@ from fastapi import FastAPI, Request, Response
 from mfcommon.iso8583.client import ISO8583Client
 from mfcommon.iso8583.correlation import CorrelationManager, TransactionTimeout
 from mfcommon.observability.audit import mask_fields
+from mfcommon.observability import trace
 from mfcommon.observability.correlation import configure_logging, set_correlation_id
 from mfcommon.soap.envelope import (
     SoapProtocolError,
@@ -57,11 +58,31 @@ WSDL_PATH = Path(
     os.environ.get("WSDL_PATH", "/app/wsdl/Iso8583Gateway.wsdl")
 )
 
+TRACE_REDIS_URL = os.environ.get("REDIS_URL")
+
 log = configure_logging("ace-stub", os.environ.get("LOG_LEVEL", "INFO"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Optional request tracing. A no-op without REDIS_URL, so local runs and
+    # tests pay nothing and behave identically. Wrapped because tracing is a
+    # debug aid and must never stop a service starting.
+    if TRACE_REDIS_URL:
+        try:
+            import redis as _redis
+
+            _tc = _redis.Redis.from_url(TRACE_REDIS_URL)
+            _tc.ping()
+            trace.configure(_tc, "ace-stub")
+            app.state.trace_redis = _tc
+            log.info("request tracing enabled")
+        except Exception as exc:  # noqa: BLE001
+            app.state.trace_redis = None
+            log.warning(f"tracing disabled, Redis unreachable: {exc}")
+    else:
+        app.state.trace_redis = None
+
     client = ISO8583Client(
         SWITCH_HOST,
         SWITCH_PORT,
@@ -170,6 +191,8 @@ async def soap_endpoint(request: Request):
         # fail identically, so the caller must not retry it.
         return _fault("soapenv:Client", str(exc), 500, detail=f"category={exc.category}")
 
+    trace.emit("iso8583", f"built MTI {mti}, sending to the switch",
+               {"mti": mti, "data_elements": sorted(de_fields.keys())})
     log.info(f"{operation} -> MTI {mti} fields={mask_fields(de_fields)}")
 
     correlator = request.app.state.correlator
@@ -200,6 +223,9 @@ async def soap_endpoint(request: Request):
             detail="category=SWITCH_DOWN",
         )
 
+    trace.emit("switch", f"switch answered MTI {parsed['mti']}",
+               {"mti": parsed["mti"], "de39": parsed["fields"].get(39),
+                "de38": parsed["fields"].get(38)})
     log.info(f"{operation} <- MTI {parsed['mti']} fields={mask_fields(parsed['fields'])}")
 
     if operation == "authorizeRequest":

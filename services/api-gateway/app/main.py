@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from mfcommon.auth.tokens import TokenError, decode_token
 from mfcommon.http.client import ServiceCallError, ServiceClient, ServiceRejectedError
+from mfcommon.observability import trace
 from mfcommon.observability.correlation import (
     CORRELATION_HEADER,
     configure_logging,
@@ -51,14 +52,39 @@ TRANSACTION_URL = os.environ.get("TRANSACTION_SERVICE_URL", "http://transaction-
 LEDGER_URL = os.environ.get("LEDGER_SERVICE_URL", "http://ledger-service:8084")
 REDIS_URL = os.environ.get("REDIS_URL")
 
+# The operator console: a live trace view, a ledger browser, an ad-hoc
+# ClickHouse query box and a load generator. All of it is a debug surface
+# on the one service with a public Route, so it is off unless asked for.
+ENABLE_CONSOLE = os.environ.get("ENABLE_CONSOLE", "0") == "1"
+
 _DEV_SECRET = "dev-only-insecure-secret-do-not-use-in-production"
 JWT_SECRET = os.environ.get("JWT_SECRET", _DEV_SECRET)
+
+TRACE_REDIS_URL = os.environ.get("REDIS_URL")
 
 log = configure_logging("api-gateway", os.environ.get("LOG_LEVEL", "INFO"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Optional request tracing. A no-op without REDIS_URL, so local runs and
+    # tests pay nothing and behave identically. Wrapped because tracing is a
+    # debug aid and must never stop a service starting.
+    if TRACE_REDIS_URL:
+        try:
+            import redis as _redis
+
+            _tc = _redis.Redis.from_url(TRACE_REDIS_URL)
+            _tc.ping()
+            trace.configure(_tc, "api-gateway")
+            app.state.trace_redis = _tc
+            log.info("request tracing enabled")
+        except Exception as exc:  # noqa: BLE001
+            app.state.trace_redis = None
+            log.warning(f"tracing disabled, Redis unreachable: {exc}")
+    else:
+        app.state.trace_redis = None
+
     if JWT_SECRET == _DEV_SECRET:
         log.warning("JWT_SECRET is unset, using the published development default.")
 
@@ -104,8 +130,18 @@ async def correlation_middleware(request: Request, call_next):
     correlation_id = incoming or new_correlation_id()
     set_correlation_id(correlation_id)
 
+    if request.url.path.startswith(("/transactions", "/accounts", "/users", "/auth")):
+        trace.emit("gateway", f"{request.method} {request.url.path}",
+                   {"client": request.client.host if request.client else "?"})
+        if getattr(request.app.state, "trace_redis", None) is not None:
+            trace.register(request.app.state.trace_redis, correlation_id,
+                           f"{request.method} {request.url.path}")
+
     response = await call_next(request)
     response.headers[CORRELATION_HEADER] = correlation_id
+    trace.emit("gateway", f"responded {response.status_code}",
+               {"status": response.status_code},
+               level="warn" if response.status_code >= 400 else "info")
     return response
 
 
@@ -261,6 +297,8 @@ def _claim(state, key: str, body: BaseModel):
             detail="This idempotency key was already used for a different request body.",
         )
     if outcome.status == "duplicate":
+        trace.emit("gateway", "idempotent replay, returning cached response",
+                   {"key": key}, level="warn")
         return outcome.cached_response
     if outcome.status == "in_progress":
         # A rare but genuine race: another request holds the claim and has
@@ -382,3 +420,35 @@ def ready(request: Request):
             "ledger-service": "open" if state.ledger.breaker.is_open else "closed",
         },
     }
+
+
+# --------------------------------------------------------------------------
+# Operator console
+# --------------------------------------------------------------------------
+#
+# Mounted last so its catch-all static route cannot shadow an API path, and
+# only when ENABLE_CONSOLE=1. In an environment where it is off, none of
+# these routes exist at all rather than existing and refusing.
+if ENABLE_CONSOLE:
+    from pathlib import Path as _Path
+
+    from fastapi.responses import FileResponse
+
+    from app.console import router as console_router
+
+    # Auth applied at the router level, so console.py never has to import
+    # current_user from this module and create a circular import. Every
+    # console route needs a token: traces carry transaction detail, and
+    # the ledger browser is the ledger.
+    app.include_router(console_router, dependencies=[Depends(current_user)])
+
+    _STATIC = _Path(__file__).parent / "static"
+
+    @app.get("/", include_in_schema=False)
+    def console_index():
+        index = _STATIC / "index.html"
+        if not index.exists():
+            return {"error": "console assets missing", "looked_in": str(_STATIC)}
+        return FileResponse(index)
+
+    log.info("operator console enabled at /")

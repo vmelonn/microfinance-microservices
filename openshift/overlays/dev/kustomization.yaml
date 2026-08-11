@@ -37,6 +37,16 @@ configMapGenerator:
       - RISK_VELOCITY_DECLINE_COUNT=3
       - RISK_VELOCITY_REVIEW_COUNT=2
 
+      # Tracing needs a Redis that EVERY service can reach, not only the two
+      # that already used one for idempotency and velocity. Best-effort: a
+      # service starts fine without it and simply records nothing.
+      - REDIS_URL=redis://redis:6379/0
+
+      # The operator console, served at the Route root. Dev only: a live
+      # trace view, a ledger browser and an ad-hoc query box have no business
+      # on a production edge.
+      - ENABLE_CONSOLE=1
+
 patches:
   # Enable the ledger wipe endpoint. Dev only, and absent from the base
   # precisely so it cannot reach production by being forgotten.

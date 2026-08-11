@@ -91,7 +91,7 @@ SERVICES = [
         "name": "risk-service",
         "port": 8083,
         "module": "app.main:app",
-        "env": {},                      # no REDIS_URL: in-memory velocity
+        "env": {},                      # REDIS_URL only if TRACE_REDIS_URL is set
     },
     {
         "name": "transaction-service",
@@ -119,8 +119,14 @@ SERVICES = [
     },
 ]
 
+# Tracing needs a Redis every service can reach. Without one the console's
+# trace tab is empty but everything else works, so this is opportunistic:
+# set TRACE_REDIS_URL before running to enable it.
+TRACE_REDIS = os.environ.get("TRACE_REDIS_URL", "")
+
 SHARED_ENV = {
     "JWT_SECRET": "local-run-shared-secret-not-for-any-real-use",
+    "ENABLE_CONSOLE": "1",
     "LOG_LEVEL": "WARNING",   # keep the console readable; per-service logs go to files
     "PYTHONUNBUFFERED": "1",
 }
@@ -129,6 +135,8 @@ SHARED_ENV = {
 def start(service: dict) -> subprocess.Popen:
     env = dict(os.environ)
     env.update(SHARED_ENV)
+    if TRACE_REDIS:
+        env["REDIS_URL"] = TRACE_REDIS
     env.update(service["env"])
     # Each service owns a top-level `app` package, so they cannot share one
     # sys.path, two services' app.main would shadow each other. A separate
