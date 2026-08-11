@@ -24,6 +24,10 @@ on:
         description: "Delete finished Jobs from the CronJobs"
         type: boolean
         default: true
+      prune_replicasets:
+        description: "Delete scaled-to-zero ReplicaSets (frees the replicaset quota)"
+        type: boolean
+        default: true
 
 jobs:
   cleanup:
@@ -57,7 +61,8 @@ jobs:
 
       - name: Before
         run: |
-          echo "pods:  $(oc get pods --no-headers 2>/dev/null | wc -l)"
+          echo "pods:        $(oc get pods --no-headers 2>/dev/null | wc -l)"
+          echo "replicasets: $(oc get rs --no-headers 2>/dev/null | wc -l) (quota caps this at 30)"
           echo "--- by phase ---"
           oc get pods --no-headers -o custom-columns=PHASE:.status.phase \
             | sort | uniq -c | sed 's/^/  /'
@@ -80,6 +85,32 @@ jobs:
             # shellcheck disable=SC2086
             oc cancel-build $STUCK || true
           fi
+
+      # THE ONE THAT UNBLOCKS ROLLOUTS.
+      #
+      # The namespace caps ReplicaSets at 30. Kubernetes keeps old ones for
+      # rollback, defaulting to 10 PER DEPLOYMENT, and every `oc rollout
+      # restart` creates another. Nine Deployments reached the cap after a
+      # handful of pipeline runs, and from then on the deployment controller
+      # could not create a ReplicaSet at all: every rollout failed with
+      # ReplicaSetCreateError, for hours, with the running pods frozen on
+      # whatever image they already had.
+      #
+      # Only ReplicaSets scaled to zero are deleted. The one actually serving
+      # traffic has spec.replicas > 0 and is left alone.
+      - name: Prune scaled-to-zero ReplicaSets
+        if: ${{ inputs.prune_replicasets }}
+        run: |
+          echo "replicasets before: $(oc get rs --no-headers 2>/dev/null | wc -l)"
+          IDLE=$(oc get rs -o jsonpath='{range .items[?(@.spec.replicas==0)]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+          if [ -z "$IDLE" ]; then
+            echo "  none idle"
+          else
+            echo "$IDLE" | sed 's/^/  /'
+            # shellcheck disable=SC2086
+            oc delete rs $(echo "$IDLE" | tr '\n' ' ') --ignore-not-found || true
+          fi
+          echo "replicasets after:  $(oc get rs --no-headers 2>/dev/null | wc -l)"
 
       # Cosmetic but worth doing: terminal pods do not consume quota, they
       # just bury the console's pod list and sit in etcd.
@@ -108,7 +139,8 @@ jobs:
 
       - name: After
         run: |
-          echo "pods:  $(oc get pods --no-headers 2>/dev/null | wc -l)"
+          echo "pods:        $(oc get pods --no-headers 2>/dev/null | wc -l)"
+          echo "replicasets: $(oc get rs --no-headers 2>/dev/null | wc -l) (quota caps this at 30)"
           echo "--- quota ---"
           # THREE different objects can enforce limits and `oc get quota` shows
           # only the first. A Red Hat sandbox uses the second, which is why

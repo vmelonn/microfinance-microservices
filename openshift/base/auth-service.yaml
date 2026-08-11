@@ -10,6 +10,15 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   replicas: 2
+  # Kubernetes keeps old ReplicaSets for rollback and DEFAULTS TO 10 PER
+  # DEPLOYMENT. Nine Deployments at that default is a ceiling of ninety
+  # ReplicaSets against a namespace quota of thirty, and since every
+  # `oc rollout restart` creates one, about four pipeline runs exhausted it
+  # permanently. Every rollout after that failed with ReplicaSetCreateError.
+  #
+  # 1 keeps the current plus one previous, so `oc rollout undo` still works
+  # one step back. Git holds the real history.
+  revisionHistoryLimit: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: auth-service
