@@ -1,54 +1,41 @@
 # transaction-service
 #
-# Build context is the REPOSITORY ROOT, not this directory:
+# Builds FROM microfinance-base, which already carries fastapi, uvicorn,
+# pydantic, httpx and mfcommon. Only this service's own extras are installed
+# here, so a rebuild is seconds rather than minutes.
+#
+# Build context is the REPOSITORY ROOT:
 #     docker build -f services/transaction-service/Dockerfile .
-# That is what lets the image install libs/mfcommon as a real package rather
-# than reaching it through a sys.path hack at runtime.
+#
+# The base must exist first:
+#     make build-base
+#
+# In the cluster the FROM line is satisfied by the microfinance-base
+# ImageStream, because the BuildConfig sets strategy.dockerStrategy.from.
+# Nothing pulls this name from a public registry.
+FROM microfinance-base:latest
 
-# ---- build stage: resolve dependencies, nothing else ----
-FROM python:3.12-slim AS builder
-WORKDIR /build
-
-COPY services/transaction-service/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
-
-# mfcommon installed as a package, so `import mfcommon` works the same in the
-# container as it does in a local venv. Copied after requirements so a change
-# to shared code does not invalidate the dependency layer.
-COPY libs/mfcommon /build/libs/mfcommon
-RUN pip install --no-cache-dir --prefix=/install --no-deps /build/libs/mfcommon
-
-# ---- runtime stage: clean image, no build tools, no pip cache ----
-FROM python:3.12-slim
 WORKDIR /app
 
-# Installed system-wide rather than into a named user's home directory.
-# This matters specifically for OpenShift: it runs containers under a
-# RANDOMLY assigned UID, not necessarily any user defined in this image, so
-# anything tied to a fixed user's home can end up unreadable to whatever UID
-# actually runs, which surfaces as a confusing "executable file not found
-# in $PATH" rather than as a permission error.
-COPY --from=builder /install /usr/local
+# No extra packages: the base covers everything this service imports.
 
 COPY services/transaction-service/app /app/app
 
-# OpenShift's random runtime UID is always a member of GID 0. Granting GID 0
-# the owner's permissions is the documented pattern for supporting that model.
+# OpenShift assigns a random runtime UID that is always a member of GID 0, so
+# granting GID 0 the owner's permissions is what makes the image work under
+# that model.
 RUN chgrp -R 0 /app && chmod -R g=u /app
 
 # A concrete non-root UID. Honoured by plain Docker for defence in depth;
-# OpenShift overrides it with its own random UID, which is exactly what the
-# GID 0 permissions above exist for.
+# OpenShift overrides it with its own, which is what the GID 0 permissions
+# above are for.
 USER 1001
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
 
 EXPOSE 8082
 
 # Hits the real /health endpoint rather than merely checking the process is
-# alive. Note this is the LIVENESS check, /ready is the one that verifies
-# downstream dependencies, and OpenShift probes it separately.
+# alive. This is LIVENESS; /ready is the one that verifies downstreams, and
+# OpenShift probes it separately.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:8082/health')" || exit 1
 

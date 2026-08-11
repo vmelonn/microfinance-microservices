@@ -33,6 +33,64 @@
 # to review and re-apply than nine slightly different command lines.
 
 ---
+# microfinance-base, built FIRST. Everything else builds FROM it.
+#
+# Eight of the nine services install an identical fastapi/uvicorn/pydantic/
+# httpx stack, and OpenShift shares no layer cache between BuildConfigs, so
+# every run compiled the same packages nine times over. Building them once
+# here turns each service build into "install my own extras", which is
+# seconds rather than minutes.
+#
+# It has no Deployment. It is never run, only inherited from.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: microfinance-base
+  labels:
+    app.kubernetes.io/name: microfinance-base
+    app.kubernetes.io/part-of: microfinance
+spec:
+  lookupPolicy:
+    local: true
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: microfinance-base
+  labels:
+    app.kubernetes.io/name: microfinance-base
+    app.kubernetes.io/part-of: microfinance
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/vmelonn/microfinance-microservices.git
+      ref: main
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: services/_base/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: microfinance-base:latest
+  triggers:
+    - type: ConfigChange
+  resources:
+    # The only build that does real compilation, so it gets more than the
+    # others. Still inside compute-build's 14Gi limits.memory with room for
+    # the service builds alongside it.
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  completionDeadlineSeconds: 1200
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
+
+---
 # api-gateway, The only service with a Route.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
@@ -69,6 +127,13 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: services/api-gateway/Dockerfile
+      # Resolves the Dockerfile's `FROM microfinance-base:latest` against the
+      # in-cluster ImageStream. Without this OpenShift takes the name
+      # literally, looks for it in a public registry, and the build fails on
+      # a pull error that does not mention ImageStreams at all.
+      from:
+        kind: ImageStreamTag
+        name: microfinance-base:latest
   output:
     to:
       kind: ImageStreamTag
@@ -151,6 +216,13 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: services/auth-service/Dockerfile
+      # Resolves the Dockerfile's `FROM microfinance-base:latest` against the
+      # in-cluster ImageStream. Without this OpenShift takes the name
+      # literally, looks for it in a public registry, and the build fails on
+      # a pull error that does not mention ImageStreams at all.
+      from:
+        kind: ImageStreamTag
+        name: microfinance-base:latest
   output:
     to:
       kind: ImageStreamTag
@@ -233,6 +305,13 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: services/transaction-service/Dockerfile
+      # Resolves the Dockerfile's `FROM microfinance-base:latest` against the
+      # in-cluster ImageStream. Without this OpenShift takes the name
+      # literally, looks for it in a public registry, and the build fails on
+      # a pull error that does not mention ImageStreams at all.
+      from:
+        kind: ImageStreamTag
+        name: microfinance-base:latest
   output:
     to:
       kind: ImageStreamTag
@@ -315,6 +394,13 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: services/risk-service/Dockerfile
+      # Resolves the Dockerfile's `FROM microfinance-base:latest` against the
+      # in-cluster ImageStream. Without this OpenShift takes the name
+      # literally, looks for it in a public registry, and the build fails on
+      # a pull error that does not mention ImageStreams at all.
+      from:
+        kind: ImageStreamTag
+        name: microfinance-base:latest
   output:
     to:
       kind: ImageStreamTag
@@ -397,6 +483,13 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: services/ledger-service/Dockerfile
+      # Resolves the Dockerfile's `FROM microfinance-base:latest` against the
+      # in-cluster ImageStream. Without this OpenShift takes the name
+      # literally, looks for it in a public registry, and the build fails on
+      # a pull error that does not mention ImageStreams at all.
+      from:
+        kind: ImageStreamTag
+        name: microfinance-base:latest
   output:
     to:
       kind: ImageStreamTag
@@ -479,6 +572,13 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: services/iso8583-adapter/Dockerfile
+      # Resolves the Dockerfile's `FROM microfinance-base:latest` against the
+      # in-cluster ImageStream. Without this OpenShift takes the name
+      # literally, looks for it in a public registry, and the build fails on
+      # a pull error that does not mention ImageStreams at all.
+      from:
+        kind: ImageStreamTag
+        name: microfinance-base:latest
   output:
     to:
       kind: ImageStreamTag
@@ -561,6 +661,13 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: services/ace-stub/Dockerfile
+      # Resolves the Dockerfile's `FROM microfinance-base:latest` against the
+      # in-cluster ImageStream. Without this OpenShift takes the name
+      # literally, looks for it in a public registry, and the build fails on
+      # a pull error that does not mention ImageStreams at all.
+      from:
+        kind: ImageStreamTag
+        name: microfinance-base:latest
   output:
     to:
       kind: ImageStreamTag
@@ -643,6 +750,13 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: services/host-simulator/Dockerfile
+      # Resolves the Dockerfile's `FROM microfinance-base:latest` against the
+      # in-cluster ImageStream. Without this OpenShift takes the name
+      # literally, looks for it in a public registry, and the build fails on
+      # a pull error that does not mention ImageStreams at all.
+      from:
+        kind: ImageStreamTag
+        name: microfinance-base:latest
   output:
     to:
       kind: ImageStreamTag
@@ -725,6 +839,13 @@ spec:
     type: Docker
     dockerStrategy:
       dockerfilePath: services/analytics-sync/Dockerfile
+      # Resolves the Dockerfile's `FROM microfinance-base:latest` against the
+      # in-cluster ImageStream. Without this OpenShift takes the name
+      # literally, looks for it in a public registry, and the build fails on
+      # a pull error that does not mention ImageStreams at all.
+      from:
+        kind: ImageStreamTag
+        name: microfinance-base:latest
   output:
     to:
       kind: ImageStreamTag

@@ -1,0 +1,23 @@
+# Only what MOST services need. A package used by one or two services stays
+# in that service's own requirements.txt, so a change there does not force a
+# rebuild of the shared base and, through it, of everything else.
+#
+#   in the base    fastapi, uvicorn, pydantic  (8 of 9 services)
+#                  httpx                        (9 of 9)
+#
+#   left out       redis               (api-gateway, risk-service)
+#                  psycopg2-binary     (auth-service, ledger-service)
+#                  cryptography        (iso8583-adapter)
+#                  clickhouse-connect  (analytics-sync)
+#
+# uvicorn[standard] is the slow one: uvloop, httptools, watchfiles and
+# websockets, several of which compile. Paying for it once instead of nine
+# times is most of the point of this image.
+#
+# mfcommon is installed by the Dockerfile from source, not listed here. It is
+# a path dependency inside this repo, not something to resolve from an index.
+
+fastapi>=0.110
+httpx>=0.27
+pydantic>=2.6
+uvicorn[standard]>=0.29

@@ -1,8 +1,6 @@
-# mfcommon is installed from source by the Dockerfile, not listed here,
-# it is a path dependency inside this repo, not something to resolve from
-# an index. For local development: pip install -e libs/mfcommon
-fastapi>=0.110
-httpx>=0.27
+# ONLY this service's extras. The shared stack (fastapi, uvicorn, pydantic,
+# httpx) and mfcommon come from microfinance-base, so listing them here would
+# reinstall them and undo the point of the base image.
+#
+# For local development outside Docker: pip install -e libs/mfcommon
 psycopg2-binary>=2.9
-pydantic>=2.6
-uvicorn[standard]>=0.29

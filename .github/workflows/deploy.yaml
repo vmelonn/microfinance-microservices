@@ -165,11 +165,56 @@ jobs:
           oc get limitrange -o wide 2>/dev/null || echo "  none"
 
   # ---------------------------------------------------------------------
-  # Nine images, three at a time.
+  # The shared base, which every service build inherits from. Must finish
+  # before any of them start, hence its own job rather than a matrix entry.
+  # ---------------------------------------------------------------------
+  build-base:
+    name: "3. Build base image"
+    needs: infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install oc
+        run: |
+          curl -sSL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz \
+            | sudo tar -xz -C /usr/local/bin oc
+          oc version --client
+
+      - name: Log in to OpenShift
+        env:
+          TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
+          SERVER: ${{ secrets.OPENSHIFT_SERVER }}
+          NAMESPACE: ${{ secrets.OPENSHIFT_NAMESPACE }}
+        run: |
+          oc login --token="$TOKEN" --server="$SERVER" --insecure-skip-tls-verify=true
+          oc project "$NAMESPACE"
+
+      # The slow one: it is the build that actually compiles uvloop,
+      # httptools and friends. Every service build afterwards only installs
+      # its own extras on top.
+      - name: Build microfinance-base
+        run: |
+          set -uo pipefail
+          if oc start-build microfinance-base --wait; then
+            echo "base image built"
+            exit 0
+          fi
+          echo "::error::base image build failed, no service can build without it"
+          BUILD=$(oc get builds -l buildconfig=microfinance-base \
+                    --sort-by=.metadata.creationTimestamp \
+                    -o jsonpath='{.items[-1:].metadata.name}')
+          oc describe build/"$BUILD" | tail -25
+          oc logs build/"$BUILD" --tail=120 || echo "(no logs, the pod never started)"
+          exit 1
+
+  # ---------------------------------------------------------------------
+  # Nine images, on top of the base.
   # ---------------------------------------------------------------------
   build:
-    name: "3. Build"
-    needs: infrastructure
+    name: "4. Build"
+    needs: build-base
     runs-on: ubuntu-latest
     # A build that cannot be scheduled used to hang until GitHub's 6-hour
     # ceiling. Generous for a pip install, fast to fail when something is
@@ -268,7 +313,7 @@ jobs:
   # Roll out, wait, then prove it works.
   # ---------------------------------------------------------------------
   deploy:
-    name: "4. Rollout and smoke test"
+    name: "5. Rollout and smoke test"
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 25

@@ -62,6 +62,9 @@ done
 
 if [ ${#TARGETS[@]} -eq 0 ]; then
   TARGETS=("${SERVICES[@]}")
+  BUILD_BASE=1        # a full run rebuilds the base first
+else
+  BUILD_BASE=0        # a targeted rebuild assumes the base is current
 fi
 
 if [ "$FROM_LOCAL" -eq 1 ]; then
@@ -73,6 +76,19 @@ else
   echo "source:    Git, per the BuildConfig"
 fi
 echo
+
+# Every service Dockerfile starts FROM microfinance-base, so it has to be
+# current before any of them build. It is the only build that compiles
+# anything (uvloop, httptools), which is precisely why it is shared.
+if [ "$BUILD_BASE" -eq 1 ]; then
+  echo "=== microfinance-base ==="
+  if [ "$FROM_LOCAL" -eq 1 ]; then
+    oc start-build microfinance-base --from-dir=. --follow --wait
+  else
+    oc start-build microfinance-base --follow --wait
+  fi
+  echo
+fi
 
 for svc in "${TARGETS[@]}"; do
   echo "=== ${svc} ==="

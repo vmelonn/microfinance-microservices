@@ -24,7 +24,7 @@ TESTED := ace-stub ledger-service
 
 .DEFAULT_GOAL := help
 .PHONY: help install test test-shared test-services lint up down logs smoke \
-        run verify build deploy-dev deploy-prod clean wsdl \
+        run verify build build-base deploy-dev deploy-prod clean wsdl \
         oc-init oc-build oc-status oc-smoke
 
 help:
@@ -85,7 +85,9 @@ verify:
 run:
 	@$(PY) scripts/run_local.py
 
-up:
+# compose builds services in parallel and does NOT order builds by
+# depends_on, so the base has to exist before it starts.
+up: build-base
 	docker compose up --build
 
 down:
@@ -105,7 +107,14 @@ smoke:
 wsdl:
 	@cat ace/Iso8583Library/wsdl/Iso8583Gateway.wsdl
 
-build:
+# The shared base. Every service Dockerfile starts FROM this, so it has to
+# exist before any of them can build. Slow the first time (it compiles
+# uvloop, httptools and friends), then cached.
+build-base:
+	@echo "=== building microfinance-base ==="
+	docker build -f services/_base/Dockerfile -t microfinance-base:latest .
+
+build: build-base
 	@for svc in $(SERVICES); do \
 		echo "=== building $$svc ==="; \
 		docker build -f "services/$$svc/Dockerfile" -t "$$svc:latest" . || exit 1; \
