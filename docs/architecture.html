@@ -263,6 +263,50 @@
 
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+  /* --- scenario gallery ------------------------------------------------
+     Recorded runs, not drawings. Each card is one situation: what it
+     proves, the ordered sequence of who decided what, and the verdict from
+     the run that produced it. */
+  .scn{border:1px solid var(--rule);border-radius:4px;background:var(--surface);
+       margin:1.1rem 0;overflow:hidden}
+  .scn > header{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;
+       padding:.7rem .9rem;background:var(--surface-sunk);
+       border-bottom:1px solid var(--rule)}
+  .scn > header h4{margin:0;font-size:var(--step-0);letter-spacing:-.01em}
+  .scn .key{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-faint)}
+  .scn .why{padding:.7rem .9rem 0;color:var(--ink-soft);max-width:var(--measure)}
+  .scn .verdict{margin-left:auto;font-family:var(--mono);font-size:var(--step--1);
+       padding:.1rem .45rem;border-radius:3px}
+  .scn .verdict.ok{background:var(--ok-sunk);color:var(--ok)}
+  .scn .verdict.no{background:var(--crit-sunk);color:var(--crit)}
+
+  ol.flow{list-style:none;counter-reset:f;margin:.7rem 0 0;padding:0 .9rem .3rem}
+  /* The global `p, li { max-width: 68ch }` is right for prose and wrong for
+     a three-column grid row carrying a mono result string, which needs the
+     full width or the last column collapses. */
+  ol.flow li{max-width:none;counter-increment:f;display:grid;
+       grid-template-columns:1.4rem 11.5rem 1fr;gap:.55rem;
+       padding:.32rem 0;border-top:1px solid var(--rule-soft);align-items:baseline}
+  ol.flow li:first-child{border-top:0}
+  ol.flow li::before{content:counter(f);font-family:var(--mono);
+       font-size:var(--step--1);color:var(--ink-faint)}
+  ol.flow .who{font-family:var(--mono);font-size:var(--step--1);
+       color:var(--accent);word-break:break-word}
+  ol.flow .did{color:var(--ink)}
+  ol.flow .got{display:block;font-family:var(--mono);font-size:var(--step--1);
+       color:var(--ink-soft);margin-top:.12rem;word-break:break-word}
+  .scn .outcome{padding:.55rem .9rem .8rem;color:var(--ink-soft);
+       border-top:1px solid var(--rule-soft);margin-top:.4rem}
+  @media (max-width:640px){
+    ol.flow li{grid-template-columns:1.2rem 1fr}
+    ol.flow .who{grid-column:2}
+    ol.flow .did{grid-column:2}
+  }
+
+  /* Two columns of invariants, for the solvency section. */
+  .pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+        gap:.8rem;margin:1rem 0}
 </style>
 
 <div class="shell">
@@ -278,8 +322,8 @@
     <div class="facts">
       <div class="fact"><b>7</b><span>services</span></div>
       <div class="fact"><b>1</b><span>SOAP hop</span></div>
-      <div class="fact"><b>3</b><span>outcome states</span></div>
-      <div class="fact"><b>67</b><span>tests passing</span></div>
+      <div class="fact"><b>4</b><span>outcome states</span></div>
+      <div class="fact"><b>109</b><span>tests passing</span></div>
     </div>
   </header>
 
@@ -290,12 +334,14 @@
       <li><a href="#soap"><span class="n">02</span> The SOAP boundary</a></li>
       <li><a href="#ace"><span class="n">03</span> IBM ACE</a></li>
       <li><a href="#saga"><span class="n">04</span> The saga</a></li>
-      <li><a href="#unknown"><span class="n">05</span> The third outcome</a></li>
-      <li><a href="#cycles"><span class="n">06</span> Cycles</a></li>
-      <li><a href="#api"><span class="n">07</span> API reference</a></li>
-      <li><a href="#data"><span class="n">08</span> Data ownership</a></li>
-      <li><a href="#deploy"><span class="n">09</span> OpenShift</a></li>
-      <li><a href="#delta"><span class="n">10</span> What changed</a></li>
+      <li><a href="#money"><span class="n">05</span> Where money comes from</a></li>
+      <li><a href="#unknown"><span class="n">06</span> The third outcome</a></li>
+      <li><a href="#cycles"><span class="n">07</span> Cycles</a></li>
+      <li><a href="#scenarios"><span class="n">08</span> Scenarios</a></li>
+      <li><a href="#api"><span class="n">09</span> API reference</a></li>
+      <li><a href="#data"><span class="n">10</span> Data ownership</a></li>
+      <li><a href="#deploy"><span class="n">11</span> OpenShift</a></li>
+      <li><a href="#delta"><span class="n">12</span> What changed</a></li>
     </ol>
   </nav>
 
@@ -831,8 +877,186 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
     </section>
 
     <!-- ============================================ 05 -->
+    <section id="money">
+      <h2><span class="num">05</span>Where money comes from</h2>
+      <p class="lede">
+        Double-entry bookkeeping will not let value appear from nowhere. That
+        constraint is the whole design of this section, and ignoring it is
+        what produced the platform's most embarrassing bug.
+      </p>
+
+      <div class="note crit">
+        <span class="tag">The bug this fixed</span>
+        <p>
+          Every customer balance in the platform was <strong>negative</strong>.
+          Not a display fault. Every posting is a debit and a credit on
+          existing accounts, customers were only ever on the debit side, and
+          nothing ever credited them, so balances could only fall. The demo
+          database showed the entire customer base thousands in debt.
+        </p>
+      </div>
+
+      <h3>The funding account</h3>
+      <p>
+        Crediting a customer requires debiting something. That something is a
+        system account, <code>acc_system_funding</code>, and it is the only
+        account permitted to go below zero.
+      </p>
+      <p>
+        Its balance is <strong>negative by design</strong>, and its magnitude
+        is exactly the float customers are holding. That is not a number to
+        fix. It is the figure a treasury team reconciles against the real bank
+        account backing the wallet, and the scenario run at the bottom of this
+        page shows the two sides agreeing to the cent.
+      </p>
+
+      <div class="scroll">
+        <svg viewBox="0 0 760 250" width="100%" role="img"
+             aria-label="Top-up flow: the funding account is debited and the customer credited">
+          <defs>
+            <marker id="mm1" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 z" fill="var(--ink-soft)"/>
+            </marker>
+            <marker id="mm2" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 z" fill="var(--ok)"/>
+            </marker>
+          </defs>
+
+          <text class="tiny" x="8" y="14">POST /transactions/topup</text>
+
+          <rect class="box" x="40" y="28" width="150" height="30" rx="15"/>
+          <text class="lbl" x="70" y="48">mobile client</text>
+
+          <rect class="box-a" x="270" y="28" width="220" height="38"/>
+          <text class="lbl" x="288" y="45">api-gateway</text>
+          <text class="tiny" x="288" y="59">JWT, idempotency key, cap</text>
+          <path class="ln" d="M190 43 L270 43" marker-end="url(#mm1)"/>
+
+          <rect class="box" x="270" y="96" width="220" height="38"/>
+          <text class="lbl" x="288" y="113">transaction-service</text>
+          <text class="tiny" x="288" y="127">owns the card? no switch call</text>
+          <path class="ln" d="M380 66 L380 96" marker-end="url(#mm1)"/>
+
+          <rect class="box" x="270" y="164" width="220" height="38"/>
+          <text class="lbl" x="288" y="181">ledger-service</text>
+          <text class="tiny" x="288" y="195">one posting, two entries</text>
+          <path class="ln" d="M380 134 L380 164" marker-end="url(#mm1)"/>
+
+          <rect class="box" x="540" y="140" width="196" height="34"/>
+          <text class="lbl" x="556" y="161">debit  acc_system_funding</text>
+          <rect class="box" x="540" y="186" width="196" height="34"/>
+          <text class="lbl" x="556" y="207">credit  the customer</text>
+          <path class="ln" d="M490 180 L522 180 L522 157 L540 157" marker-end="url(#mm2)"/>
+          <path class="ln" d="M490 186 L522 186 L522 203 L540 203" marker-end="url(#mm2)"/>
+
+          <text class="tiny" x="540" y="126">the funding account goes NEGATIVE</text>
+        </svg>
+      </div>
+
+      <p>
+        A top-up deliberately does not touch the switch. It models an agent
+        cash-in: somebody hands over money and the wallet is credited, and
+        there is no card being charged to authorise. A card-funded top-up
+        would be a real ISO 8583 transaction with processing code
+        <code>21</code>, running the same saga as a purchase. The PIN is
+        absent for the same reason: a PIN authorises money <em>leaving</em> an
+        account. What still has to be proven is that the card belongs to the
+        caller, and it is.
+      </p>
+
+      <h3>Solvency is enforced by the database, not by Python</h3>
+      <p>
+        The obvious implementation, read the balance and then post if it is
+        sufficient, is wrong. Two concurrent spends can each read the same
+        sufficient balance and both post. The check therefore happens
+        <strong>inside the same transaction as the insert</strong>, holding a
+        row lock:
+      </p>
+
+      <pre><code><span class="c"># ledger-service, _assert_solvent, called from inside record_posting</span>
+<span class="k">if</span> self.db.is_postgres:
+    cur.execute(<span class="s">"SELECT type FROM accounts WHERE account_id = %s FOR UPDATE"</span>, (account_id,))
+<span class="c"># ... sum the entries, then:</span>
+<span class="k">if</span> current - amount_cents &lt; <span class="k">0</span>:
+    <span class="k">raise</span> InsufficientFunds(account_id, current, amount_cents)</code></pre>
+
+      <div class="note warn">
+        <span class="tag">SQLite does not give this for free</span>
+        <p>
+          The first version of this assumed SQLite's writer lock made the
+          read-then-write safe. It does not. Python's driver starts a
+          transaction at the first <code>INSERT</code>, not the first
+          <code>SELECT</code>, so the balance check ran in autocommit,
+          outside the transaction entirely. Ten threads spending one balance:
+          <strong>four succeeded</strong>. <code>Database.transaction()</code>
+          now opens with <code>BEGIN IMMEDIATE</code>, which takes the write
+          lock up front. Removing it again and rerunning is how that was
+          confirmed rather than assumed: 8 of 10 rounds overdrew, one as far
+          as -70000 cents.
+        </p>
+      </div>
+
+      <h3>Two checks, and only one of them is the guarantee</h3>
+      <div class="pair">
+        <div class="note">
+          <span class="tag">ledger-service, authoritative</span>
+          <p>
+            Atomic, inside the posting transaction. This is what makes an
+            overdraft impossible. It answers with HTTP <code>409</code>, which
+            is deliberately distinct from the <code>422</code> for a
+            nonexistent account, because the saga treats them differently.
+          </p>
+        </div>
+        <div class="note">
+          <span class="tag">transaction-service, courtesy</span>
+          <p>
+            A pre-check before the switch is contacted. Racy by nature and
+            not relied upon. Its only job is to stop an unaffordable purchase
+            producing a real authorisation that then has to be reversed.
+          </p>
+        </div>
+      </div>
+
+      <p>
+        The pre-check runs <strong>before the risk evaluation</strong>, not
+        after. Risk is stateful: evaluating records an attempt, which is why
+        it is never retried. Handing it a transaction that was never going to
+        proceed means a customer tapping "pay" on an empty wallet inflates
+        their own velocity counter and sends their next funded transaction to
+        review.
+      </p>
+      <div class="note">
+        <span class="tag">The cost of that ordering</span>
+        <p>
+          It is a real trade, not a free win. Attempts declined for
+          insufficient funds never reach risk-service, so somebody hammering
+          a drained account is invisible to the velocity rules. That is
+          acceptable here because an empty account is not worth attacking,
+          but it would not be acceptable on a credit product, where the same
+          ordering would hide exactly the behaviour you want to catch.
+        </p>
+      </div>
+
+      <h3>The invariant</h3>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Account type</th><th>May go negative</th><th>Meaning if it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>checking</code>, a customer</td><td><span class="pill crit">no</span></td><td>A bug. Money was created.</td></tr>
+            <tr><td><code>system</code>, the funding account</td><td><span class="pill ok">yes</span></td><td>The float customers are holding, owed in from outside.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Summed across every account, the two always cancel. That is the
+        <code>is_balanced()</code> check, and it is asserted at the end of the
+        scenario run below.
+      </p>
+    </section>
+
+    <!-- ============================================ 06 -->
     <section id="unknown">
-      <h2><span class="num">05</span>The third outcome</h2>
+      <h2><span class="num">06</span>The third outcome</h2>
       <p class="lede">
         The single most important difference between this platform and the
         monolith it came from.
@@ -861,7 +1085,8 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
           <tbody>
             <tr><td><span class="pill ok">approved</span></td><td>yes</td><td>no</td><td>Success, with an RRN and an authorization ID.</td></tr>
             <tr><td><span class="pill crit">declined</span></td><td>no</td><td>no</td><td>A specific reason, decoded from DE 39.</td></tr>
-            <tr><td><span class="pill warn">unknown</span></td><td><strong>no</strong></td><td>yes</td><td><code>requires_reconciliation: true</code>. Do not blindly retry.</td></tr>
+            <tr><td><span class="pill warn">reversed</span></td><td><strong>no</strong></td><td>yes, acknowledged</td><td>The authorisation happened and was undone. No money moved.</td></tr>
+            <tr><td><span class="pill warn">unknown</span></td><td><strong>no</strong></td><td>attempted, not acknowledged</td><td><code>requires_reconciliation: true</code>. Do not blindly retry.</td></tr>
           </tbody>
         </table>
       </div>
@@ -876,7 +1101,21 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         loud and temporary.
       </p>
 
-      <pre><code><span class="c"># transaction-service, step 3</span>
+      <div class="note crit">
+        <span class="tag">A bug the solvency work exposed</span>
+        <p>
+          When the ledger refused a posting, the saga compensated correctly
+          with a reversal, but the response still said
+          <code>status: "approved"</code> with <code>ledger_status:
+          "reversed"</code> buried inside it. A client reading the field it is
+          supposed to read was told the payment succeeded when no money had
+          moved. Overdraft protection made that path reachable for an ordinary
+          reason rather than only during an outage, which is how it surfaced.
+          <code>reversed</code> is now a top-level outcome of its own.
+        </p>
+      </div>
+
+      <pre><code><span class="c"># transaction-service, step 4</span>
 <span class="k">if</span> auth[<span class="s">"outcome"</span>] == <span class="s">"unknown"</span>:
     log.error(<span class="s">f"UNKNOWN outcome rrn={rrn}, no ledger posting"</span>)
     <span class="k">return</span> TransactionResponse(
@@ -886,9 +1125,9 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
     )</code></pre>
     </section>
 
-    <!-- ============================================ 06 -->
+    <!-- ============================================ 07 -->
     <section id="cycles">
-      <h2><span class="num">06</span>Cycles</h2>
+      <h2><span class="num">07</span>Cycles</h2>
 
       <h3>Correlation IDs</h3>
       <p>
@@ -960,9 +1199,395 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
       </div>
     </section>
 
-    <!-- ============================================ 07 -->
+    <!-- ============================================ 08 -->
+    <section id="scenarios">
+      <h2><span class="num">08</span>Scenarios</h2>
+      <p class="lede">
+        Every flow below is a <strong>recording</strong>, not a drawing. It was
+        produced by running the platform.
+      </p>
+
+      <p>
+        <code>scripts/scenarios.py</code> boots all eight services, drives each
+        situation from outside exactly as a mobile client would, and records
+        which layer decided what, in order. This section is generated from that
+        recording, so a flow cannot drift away from the code: changing an
+        ordering changes the run, and regenerating produces the new sequence.
+      </p>
+
+      <pre><code>python scripts/scenarios.py                  <span class="c"># boot, run, tear down</span>
+python scripts/scenarios.py --base $ROUTE    <span class="c"># against a live deployment</span>
+python scripts/scenarios.py --only risk      <span class="c"># one group</span></code></pre>
+
+      <div class="facts">
+        <div class="fact"><b>22</b><span>scenarios</span></div>
+        <div class="fact"><b>90</b><span>recorded steps</span></div>
+        <div class="fact"><b>22 / 22</b><span>behaved as documented</span></div>
+      </div>
+
+      <div class="note">
+        <span class="tag">Why this is separate from the tests</span>
+        <p>
+          The test suites answer "is this correct" and are deliberately terse.
+          This answers "what happens, in what order, and who decided", which is
+          the part that is hard to recover from either the code or a passing
+          assertion. Each scenario is self-contained, with a fresh customer,
+          card and wallet, because the risk engine counts attempts per card in
+          a 60 second window and shared state between scenarios would look
+          exactly like flakiness.
+        </p>
+      </div>
+
+      <h3>The money path</h3>
+      <div class="scn">
+        <header>
+          <h4>Registration is a two-service saga</h4>
+          <span class="key">registration</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">auth-service and ledger-service must both succeed or neither does, and the phone number is normalised once on the way in.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">POST /users/register with msisdn typed as &#x27;0300 581 7070&#x27;</span></li>
+          <li><span class="who">api-gateway</span><span class="did">normalise MSISDN, then orchestrate two services<span class="got">HTTP 200</span></span></li>
+          <li><span class="who">auth-service</span><span class="did">create the user, hash the password (bcrypt)<span class="got">user_id=usr_def1554731f4</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">create the account and bind the card<span class="got">account_id=acc_e9abc838af78 balance=0.00</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">the stored identifier<span class="got">923005817070</span></span></li>
+          <li><span class="who">auth-service</span><span class="did">log in with the SAME number typed differently<span class="got">token issued</span></span></li>
+        </ol>
+        <p class="outcome">One subscriber, one stored identifier 923005817070, reachable however it is typed.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>A new wallet is empty and cannot spend</h4>
+          <span class="key">empty-wallet</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">Every account opens at zero. The decline happens before the switch is contacted, so no authorisation exists that would need reversing.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">register, then immediately try to pay 25.50<span class="got">balance=0.00</span></span></li>
+          <li><span class="who">transaction-service</span><span class="did">step 2, solvency pre-check against ledger-service<span class="got">0 cents available, 2550 required</span></span></li>
+          <li><span class="who">transaction-service</span><span class="did">decline without calling risk or the switch<span class="got">status=declined</span></span></li>
+          <li><span class="who">switch</span><span class="did">never contacted<span class="got">rrn=None</span></span></li>
+        </ol>
+        <p class="outcome">Declined: Insufficient funds. Top up your wallet and try again.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>Money enters through the funding account</h4>
+          <span class="key">topup</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">Double-entry means crediting a customer requires debiting something. That something is acc_system_funding, which is negative by design.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">POST /transactions/topup for 100.00</span></li>
+          <li><span class="who">transaction-service</span><span class="did">no switch call: this models an agent cash-in, not a card being charged</span></li>
+          <li><span class="who">ledger-service</span><span class="did">one posting, two entries<span class="got">debit acc_system_funding 10000, credit acc_3ca946a8bb3e 10000</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">idempotent on RRN<span class="got">rrn=178645525860</span></span></li>
+          <li><span class="who">client</span><span class="did">GET /accounts/{card}/balance<span class="got">100.00</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">debits still equal credits<span class="got">balanced=True</span></span></li>
+        </ol>
+        <p class="outcome">Wallet at 100.00. The funding account is now 100.00 negative, which is the float this customer holds.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>A purchase, all the way down and back</h4>
+          <span class="key">purchase</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">REST into the gateway, SOAP to the ISO 8583 gateway, BCD-packed binary over a socket to the switch, and the same path in reverse.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">POST /transactions/purchase 25.50, entry mode 05 (chip)<span class="got">balance before=100.00</span></span></li>
+          <li><span class="who">api-gateway</span><span class="did">claim the idempotency key in Redis (SET NX)</span></li>
+          <li><span class="who">transaction-service</span><span class="did">resolve card, prove ownership, check solvency</span></li>
+          <li><span class="who">risk-service</span><span class="did">velocity, amount and entry-mode rules<span class="got">approve</span></span></li>
+          <li><span class="who">iso8583-adapter</span><span class="did">build the 0200, encrypt the PIN block, assign a STAN<span class="got">stan=000008</span></span></li>
+          <li><span class="who">ace-stub (SOAP)</span><span class="did">document/literal envelope, DFDL to ISO 8583<span class="got">authorizeRequest</span></span></li>
+          <li><span class="who">host-simulator</span><span class="did">0200 in, 0210 out<span class="got">DE 39=00 auth=A18008</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">double-entry posting, idempotent on RRN<span class="got">rrn=178645525810 status=recorded</span></span></li>
+          <li><span class="who">client</span><span class="did">balance after<span class="got">74.50</span></span></li>
+        </ol>
+        <p class="outcome">Approved. Approved / completed successfully</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>Spending more than you hold is refused</h4>
+          <span class="key">overspend</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">The ledger is the authority. The pre-check is only there to stop an unaffordable transaction reaching the switch.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">wallet holds 50.00, try to spend 500.00</span></li>
+          <li><span class="who">transaction-service</span><span class="did">solvency pre-check<span class="got">5000 available, 50000 required</span></span></li>
+          <li><span class="who">transaction-service</span><span class="did">declined<span class="got">status=declined</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">balance untouched<span class="got">50.00</span></span></li>
+        </ol>
+        <p class="outcome">Refused, and nothing was written.</p>
+      </div>
+
+      <h3>Idempotency</h3>
+      <div class="scn">
+        <header>
+          <h4>The same key returns the same result</h4>
+          <span class="key">replay</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">A client that retries after a lost response must not be charged twice. The claim lives in Redis, so it holds across gateway replicas.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">POST /transactions/purchase<span class="got">rrn=178645525996</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">balance after the first call<span class="got">74.50</span></span></li>
+          <li><span class="who">client</span><span class="did">the identical request again, same idempotency key</span></li>
+          <li><span class="who">api-gateway</span><span class="did">key already claimed, return the stored response<span class="got">rrn=178645525996</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">balance unchanged, the switch was never called again<span class="got">74.50</span></span></li>
+        </ol>
+        <p class="outcome">One charge, two responses, identical RRN.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>A reused key with a different body is rejected</h4>
+          <span class="key">key-reuse</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">Returning the cached response would answer the wrong question; charging would break the guarantee. So it is an error.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">pay 25.50 with a key<span class="got">approved</span></span></li>
+          <li><span class="who">client</span><span class="did">pay 999.00 with the SAME key</span></li>
+          <li><span class="who">api-gateway</span><span class="did">fingerprint of the body does not match the claim<span class="got">HTTP 400</span></span></li>
+        </ol>
+        <p class="outcome">Rejected: This idempotency key was already used for a different request body.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>The ledger is idempotent on RRN</h4>
+          <span class="key">ledger-idempotency</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">The gateway&#x27;s Redis claim is best-effort. The PRIMARY KEY on transactions.rrn is the guarantee that cannot be wrong.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">a top-up lands<span class="got">rrn=178645526190 balance=100.00</span></span></li>
+          <li><span class="who">note</span><span class="did">replaying the same RRN at the ledger is an internal call<span class="got">shown here because it is the layer the retry policy depends on</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">second insert with the same RRN hits the primary key<span class="got">returns already_recorded rather than posting again</span></span></li>
+        </ol>
+        <p class="outcome">The RRN is the unit of deduplication, not the HTTP request.</p>
+      </div>
+
+      <h3>Risk</h3>
+      <div class="scn">
+        <header>
+          <h4>A large amount goes to review</h4>
+          <span class="key">risk-amount-review</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">Over 2,000.00 the transaction is held rather than declined. Review is a distinct outcome from decline, and it does not reach the switch.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">wallet funded to 5,000.00, pay 2,500.00</span></li>
+          <li><span class="who">risk-service</span><span class="did">amount rule: 250000 cents is over the 200000 threshold<span class="got">outcome=review</span></span></li>
+          <li><span class="who">switch</span><span class="did">not contacted<span class="got">rrn=None</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">nothing posted<span class="got">balance=5,000.00</span></span></li>
+        </ol>
+        <p class="outcome">amount 250000 cents exceeds review threshold 200000</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>A very large amount is declined outright</h4>
+          <span class="key">risk-amount-decline</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">Over 10,000.00 there is no review queue, it is simply refused.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">wallet funded to 20,000.00, pay 12,000.00</span></li>
+          <li><span class="who">risk-service</span><span class="did">amount rule: 1200000 cents is over the 1000000 hard limit<span class="got">outcome=decline</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">nothing posted<span class="got">balance=20,000.00</span></span></li>
+        </ol>
+        <p class="outcome">amount 1200000 cents exceeds hard limit 1000000</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>Manual key entry raises the bar</h4>
+          <span class="key">risk-entry-mode</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">DE 22 carries how the card was read. A keyed entry over 500.00 is reviewed at an amount a chip read would approve.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">600.00, entry mode 05 (chip)<span class="got">status=approved</span></span></li>
+          <li><span class="who">client</span><span class="did">the same 600.00, entry mode 01 (manually keyed)<span class="got">status=review</span></span></li>
+          <li><span class="who">risk-service</span><span class="did">entry-mode rule fired only for the keyed attempt<span class="got">manually keyed entry combined with an elevated amount</span></span></li>
+        </ol>
+        <p class="outcome">Same amount, same card type, different outcome, because how the card was read is itself a signal.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>Velocity escalates approve to review to decline</h4>
+          <span class="key">risk-velocity</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">Counted per card in a 60 second window. In the deployed platform the counter is in Redis, so it escalates across gateway replicas.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">seven 5.00 purchases in quick succession on one card</span></li>
+          <li><span class="who">risk-service</span><span class="did">attempts counted in a 60s window<span class="got">approved -&gt; approved -&gt; approved -&gt; review -&gt; review -&gt; decline -&gt; decline</span></span></li>
+          <li><span class="who">risk-service</span><span class="did">thresholds<span class="got">review above 3 attempts, decline above 5</span></span></li>
+        </ol>
+        <p class="outcome">Escalation is gradual, and it is the risk engine talking, not the solvency check.</p>
+      </div>
+
+      <h3>Authorization</h3>
+      <div class="scn">
+        <header>
+          <h4>A token cannot spend another card</h4>
+          <span class="key">authz-cross-account</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">Authentication proves who is calling. It does not prove they may debit this particular card, which is a separate check.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">attacker holds a valid token and knows the victim&#x27;s card number</span></li>
+          <li><span class="who">transaction-service</span><span class="did">card owner does not match the token subject<span class="got">HTTP 403</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">victim untouched<span class="got">100.00</span></span></li>
+        </ol>
+        <p class="outcome">403. A valid token is not a licence to spend from any card.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>An unregistered card is refused</h4>
+          <span class="key">authz-unknown-card</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">Resolution happens before anything else, and failing it costs nothing.</p>
+        <ol class="flow">
+          <li><span class="who">transaction-service</span><span class="did">resolve the card at ledger-service<span class="got">HTTP 404</span></span></li>
+        </ol>
+        <p class="outcome">404 before any money path is entered.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>No token, no transaction</h4>
+          <span class="key">authz-no-token</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">The gateway is the only place this is enforced, because nothing else is reachable from outside the namespace.</p>
+        <ol class="flow">
+          <li><span class="who">api-gateway</span><span class="did">no Authorization header<span class="got">HTTP 401</span></span></li>
+        </ol>
+        <p class="outcome">401 at the edge.</p>
+      </div>
+
+      <h3>Transfers</h3>
+      <div class="scn">
+        <header>
+          <h4>Send money to a phone number</h4>
+          <span class="key">transfer</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">The MSISDN is the account. This only works if auth-service and ledger-service normalise the number identically.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">recipient registered as 03614612828, sender types 03614612828</span></li>
+          <li><span class="who">ledger-service</span><span class="did">resolve payee: card, then account id, then MSISDN<span class="got">resolved to acc_ed63f92f3d70</span></span></li>
+          <li><span class="who">iso8583-adapter</span><span class="did">processing code 400000, recipient in DE 103<span class="got">status=approved</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">one posting, sender debited, recipient credited<span class="got">rrn=178645526625</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">recipient balance<span class="got">7.50</span></span></li>
+        </ol>
+        <p class="outcome">Card lookup is tried first, because a 12 to 15 digit card is indistinguishable from a phone number by length.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>You cannot pay yourself</h4>
+          <span class="key">self-transfer</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">A debit and a credit on one account balances perfectly and moves nothing. Recording it would be noise in the journal.</p>
+        <ol class="flow">
+          <li><span class="who">transaction-service</span><span class="did">sender and recipient resolve to one account<span class="got">HTTP 400</span></span></li>
+        </ol>
+        <p class="outcome">Sender and recipient are the same account.</p>
+      </div>
+
+      <h3>Failure and compensation</h3>
+      <div class="scn">
+        <header>
+          <h4>A switch timeout is an UNKNOWN outcome, not a decline</h4>
+          <span class="key">switch-timeout</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">The request may have been processed. Treating silence as a decline is how a customer gets charged for a transaction the platform denies.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">SOAP authorizeRequest with DE 48 = SIMULATE_TIMEOUT<span class="got">sent straight to the ISO 8583 gateway</span></span></li>
+          <li><span class="who">host-simulator</span><span class="did">DE 48 recognised, no 0210 is ever sent<span class="got">silence on the socket</span></span></li>
+          <li><span class="who">ace-stub</span><span class="did">the read times out waiting for a reply<span class="got">after 10.0s</span></span></li>
+          <li><span class="who">ace-stub</span><span class="did">returns a SOAP fault, which arrives as HTTP 500<span class="got">HTTP 504</span></span></li>
+          <li><span class="who">client</span><span class="did">fault body<span class="got">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&lt;soapenv:Envelope xmlns:soapenv=&quot;http://schemas.xmlsoap.org/soap/envelope/&quot;&gt;&lt;soapenv:Body&gt;&lt;soapenv:Fault&gt;&lt;faultc</span></span></li>
+        </ol>
+        <p class="outcome">Fault after 10.0s of silence. The caller is told the outcome is UNKNOWN, and transaction-service answers an unknown with a reversal rather than a decline.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>When the ledger refuses after the switch approved, the saga reverses</h4>
+          <span class="key">saga-compensation</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">The authorisation is real and must be undone. The customer is told &#x27;reversed&#x27;, not &#x27;approved&#x27;, because no money moved.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">wallet holds exactly 20.00, fire 6 concurrent 20.00 purchases</span></li>
+          <li><span class="who">note</span><span class="did">every request passes the pre-check, because they all read the balance before any of them posts</span></li>
+          <li><span class="who">switch</span><span class="did">authorises every request that got past the pre-check<span class="got">6 attempts</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">solvency enforced inside the posting transaction<span class="got">1 posted, 2 refused after authorisation</span></span></li>
+          <li><span class="who">transaction-service</span><span class="did">compensating 0400 reversal for each refusal<span class="got">2 reversed</span></span></li>
+          <li><span class="who">all outcomes</span><span class="did">the full tally<span class="got">1 approved, 2 declined, 2 reversed, 1 review</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">final balance, never negative<span class="got">0.00</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">books still balance<span class="got">balanced=True</span></span></li>
+        </ol>
+        <p class="outcome">Exactly one of six succeeded and the balance is 0.00. Full tally: 1 approved, 2 declined, 2 reversed, 1 review.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>A risk service that is down fails CLOSED</h4>
+          <span class="key">risk-unavailable</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">An outage must not become an open fraud window. The alternative, approving because the check could not run, is strictly worse.</p>
+        <ol class="flow">
+          <li><span class="who">operator</span><span class="did">stop risk-service<span class="got">SIGTERM</span></span></li>
+          <li><span class="who">operator</span><span class="did">confirm nothing is listening on :8083<span class="got">port closed</span></span></li>
+          <li><span class="who">transaction-service</span><span class="did">risk-service unreachable<span class="got">HTTP 503</span></span></li>
+          <li><span class="who">transaction-service</span><span class="did">refuse rather than approve unchecked<span class="got">Transaction service unavailable: [transaction-service] POST /internal/transactio</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">nothing posted<span class="got">100.00</span></span></li>
+          <li><span class="who">operator</span><span class="did">restart risk-service<span class="got">ready</span></span></li>
+        </ol>
+        <p class="outcome">503 while the check cannot run. Approving unchecked would turn an outage into an open fraud window.</p>
+      </div>
+
+      <h3>Concurrency and integrity</h3>
+      <div class="scn">
+        <header>
+          <h4>Concurrent spends cannot overdraw one balance</h4>
+          <span class="key">concurrency</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">The failure mode is two debits reading the same sufficient balance and both posting. It has to be the database that prevents this, not Python.</p>
+        <ol class="flow">
+          <li><span class="who">client</span><span class="did">wallet holds 30.00, fire 8 concurrent 30.00 purchases</span></li>
+          <li><span class="who">ledger-service</span><span class="did">SELECT FOR UPDATE on the debit row, inside the same transaction as the insert<span class="got">1 approved, 1 decline, 2 declined, 2 reversed, 2 review</span></span></li>
+          <li><span class="who">note</span><span class="did">the review and decline outcomes are the risk engine, not solvency<span class="got">eight attempts in one second also trips velocity</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">final balance<span class="got">0.00</span></span></li>
+        </ol>
+        <p class="outcome">One of eight succeeded. Balance 0.00, never below zero.</p>
+      </div>
+      <div class="scn">
+        <header>
+          <h4>The books balance, always</h4>
+          <span class="key">integrity</span>
+          <span class="verdict ok">ok</span>
+        </header>
+        <p class="why">Total debits equal total credits across every posting the simulator has just made, including the reversed and declined ones.</p>
+        <ol class="flow">
+          <li><span class="who">ledger-service</span><span class="did">SUM(debits) - SUM(credits)<span class="got">balanced=True</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">customer float<span class="got">30,500.00</span></span></li>
+          <li><span class="who">ledger-service</span><span class="did">funding account, the mirror image<span class="got">-30,500.00</span></span></li>
+        </ol>
+        <p class="outcome">The funding account owes exactly what customers hold. That is the number a treasury team reconciles.</p>
+      </div>
+    </section>
+
+    <!-- ============================================ 09 -->
     <section id="api">
-      <h2><span class="num">07</span>API reference</h2>
+      <h2><span class="num">09</span>API reference</h2>
       <p class="lede">
         Public endpoints are on api-gateway. Everything under
         <code>/internal</code> has no Route and is reachable only from inside
@@ -1092,9 +1717,9 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
       </p>
     </section>
 
-    <!-- ============================================ 08 -->
+    <!-- ============================================ 10 -->
     <section id="data">
-      <h2><span class="num">08</span>Data ownership</h2>
+      <h2><span class="num">10</span>Data ownership</h2>
       <p class="lede">
         Four stores, three owners. The boundaries are about who may migrate a
         schema, not about how many processes are running.
@@ -1137,9 +1762,9 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
       </p>
     </section>
 
-    <!-- ============================================ 09 -->
+    <!-- ============================================ 11 -->
     <section id="deploy">
-      <h2><span class="num">09</span>OpenShift</h2>
+      <h2><span class="num">11</span>OpenShift</h2>
 
       <pre><code>make build                              <span class="c"># nine images</span>
 oc apply -k openshift/overlays/dev
@@ -1199,9 +1824,9 @@ make smoke</code></pre>
       </ol>
     </section>
 
-    <!-- ============================================ 10 -->
+    <!-- ============================================ 12 -->
     <section id="delta">
-      <h2><span class="num">10</span>What changed, and what it cost</h2>
+      <h2><span class="num">12</span>What changed, and what it cost</h2>
 
       <div class="scroll">
         <table>

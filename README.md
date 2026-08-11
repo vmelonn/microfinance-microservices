@@ -74,6 +74,33 @@ starting api-gateway            :18080  ready
   PASS  total debits == total credits
 ```
 
+### Seeing what actually happens
+
+```bash
+make scenarios          # boot everything, drive 22 situations, tear down
+```
+
+`scripts/scenarios.py` walks the platform through the cases it is built for,
+the happy path, an empty wallet, an overspend, a switch timeout, a saga
+compensating a reversal, a risk service that is down, eight concurrent spends
+on one balance, and records which layer decided what, in order:
+
+```
+  When the ledger refuses after the switch approved, the saga reverses
+                  client  wallet holds exactly 20.00, fire 6 concurrent 20.00 purchases
+                  switch  authorises every request that got past the pre-check
+                        -> 6 attempts
+          ledger-service  solvency enforced inside the posting transaction
+                        -> 1 posted, 2 refused after authorisation
+     transaction-service  compensating 0400 reversal for each refusal
+            all outcomes  1 approved, 2 declined, 2 reversed, 1 review
+          ledger-service  final balance, never negative -> 0.00
+```
+
+The scenario gallery in [docs/architecture.html](docs/architecture.html) is
+generated from that recording, so the documented flows are recordings rather
+than drawings and cannot drift from the code.
+
 ### Where the money comes from
 
 Every wallet opens at **zero** and cannot be overdrawn. A debit that would

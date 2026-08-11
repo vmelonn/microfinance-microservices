@@ -24,7 +24,7 @@ TESTED := ace-stub ledger-service
 
 .DEFAULT_GOAL := help
 .PHONY: help install test test-shared test-services lint up down logs smoke \
-        run verify build build-base deploy-dev deploy-prod clean wsdl \
+        run verify scenarios scenarios-json build build-base deploy-dev deploy-prod clean wsdl \
         oc-init oc-build oc-status oc-smoke
 
 help:
@@ -36,6 +36,7 @@ help:
 	@echo "                REST->SOAP->ISO 8583->REST path, tear down."
 	@echo "                No Docker required."
 	@echo "  run           same, but leave it running on :18080"
+	@echo "  scenarios     drive 22 situations and record what each layer did"
 	@echo "  up            docker compose up --build (needs a container engine)"
 	@echo "  down          stop and remove containers"
 	@echo "  smoke         end-to-end purchase against a running compose stack"
@@ -84,6 +85,17 @@ verify:
 
 run:
 	@$(PY) scripts/run_local.py
+
+# Drives every situation the platform is built to handle and records which
+# layer decided what. The recording is the source for the scenario gallery in
+# docs/architecture.html, so regenerate it after changing an ordering, a risk
+# threshold, or anything else a documented flow depends on.
+scenarios:
+	@$(PY) scripts/scenarios.py
+
+scenarios-json:
+	@$(PY) scripts/scenarios.py --json docs/scenarios.json
+
 
 # compose builds services in parallel and does NOT order builds by
 # depends_on, so the base has to exist before it starts.

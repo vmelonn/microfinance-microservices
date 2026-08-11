@@ -16,6 +16,7 @@ Uses only the standard library, so it runs with no install.
 import argparse
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -36,6 +37,10 @@ GATEWAY_2 = "http://localhost:8081"   # the second replica
 # a trust problem rather than the service being down. Opt-in only, so nobody
 # turns verification off without meaning to.
 _SSL_CONTEXT = None
+
+# Set by --base. Only changes the ADVICE printed on failure: "docker compose
+# up" is actively misleading when the target is an OpenShift Route.
+TARGETING_ROUTE = False
 
 PASS, FAIL = "  PASS", "  FAIL"
 failures = []
@@ -86,11 +91,65 @@ def register(base):
     return token_body["access_token"], card, body["account_id"]
 
 
+def wait_for_gateway(base, timeout=120):
+    """
+    Poll /health until the gateway answers, or give up and say why.
+
+    WHY A WAIT AND NOT A SINGLE CALL. A deployment reporting readyReplicas ==
+    replicas is not the same as the Route serving traffic. The router has to
+    observe the new endpoints and drop the terminating ones, and that lags the
+    Deployment status by a few seconds. Failing on the first attempt turns
+    that ordinary lag into a red pipeline, which is exactly what happened:
+    the rollout gate passed and the very next command got nothing.
+
+    Every distinct failure is reported once rather than every poll, so the log
+    shows the sequence of states instead of forty identical lines.
+    """
+    deadline = time.time() + timeout
+    seen, last = set(), None
+
+    while time.time() < deadline:
+        status, body = call(base, "GET", "/health")
+        if status == 200:
+            return True, status, body
+        signature = (status, str(body)[:120])
+        if signature not in seen:
+            seen.add(signature)
+            remaining = int(deadline - time.time())
+            print(f"        waiting for the gateway: {_explain(status, body)} "
+                  f"({remaining}s left)")
+        last = (status, body)
+        time.sleep(3)
+
+    return False, last[0] if last else 0, last[1] if last else {}
+
+
+def _explain(status, body):
+    """Turn a status into the thing that is actually wrong."""
+    if status == 0:
+        return (f"cannot connect. DNS, TLS or the host is wrong: "
+                f"{str(body.get('error', body))[:100]}")
+    if status == 503:
+        return "503 from the router: the Route exists but has no ready endpoints behind it"
+    if status in (502, 504):
+        return f"{status} from the router: an endpoint exists but is not answering"
+    if status == 404:
+        return "404: reached a router, but nothing is routed for this host"
+    return f"HTTP {status}: {str(body)[:100]}"
+
+
 def main():
     print("\n=== 0. the platform is up ===")
-    status, _ = call(GATEWAY_1, "GET", "/health")
-    if status != 200:
-        print(f"{FAIL}  api-gateway is not responding on {GATEWAY_1}. Run: docker compose up --build")
+    up, status, body = wait_for_gateway(GATEWAY_1)
+    if not up:
+        print(f"{FAIL}  api-gateway never answered on {GATEWAY_1}")
+        print(f"        {_explain(status, body)}")
+        if TARGETING_ROUTE:
+            print("        Check:  oc get pods -o wide")
+            print("                oc get endpoints api-gateway")
+            print("                oc logs deploy/api-gateway --tail=50")
+        else:
+            print("        Run: docker compose up --build")
         sys.exit(1)
     check("api-gateway healthy", True)
 
@@ -277,6 +336,7 @@ if __name__ == "__main__":
     if args.base:
         base = args.base.rstrip("/")
         GATEWAY_1 = GATEWAY_2 = base
+        TARGETING_ROUTE = True
         print(f"targeting {base} (single endpoint, the Route load-balances across replicas)")
 
     if args.insecure:
