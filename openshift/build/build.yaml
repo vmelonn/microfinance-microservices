@@ -107,8 +107,12 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
-  successfulBuildsHistoryLimit: 3
-  failedBuildsHistoryLimit: 5
+  # Retention kept deliberately tight. At 3 successful + 5 failed across nine
+  # BuildConfigs this retained up to 72 build pods, which buried the console's
+  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # already captured in the CI job output.
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 
 ---
 # auth-service -- Users and JWT issuance.
@@ -185,8 +189,12 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
-  successfulBuildsHistoryLimit: 3
-  failedBuildsHistoryLimit: 5
+  # Retention kept deliberately tight. At 3 successful + 5 failed across nine
+  # BuildConfigs this retained up to 72 build pods, which buried the console's
+  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # already captured in the CI job output.
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 
 ---
 # transaction-service -- The saga orchestrator.
@@ -263,8 +271,12 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
-  successfulBuildsHistoryLimit: 3
-  failedBuildsHistoryLimit: 5
+  # Retention kept deliberately tight. At 3 successful + 5 failed across nine
+  # BuildConfigs this retained up to 72 build pods, which buried the console's
+  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # already captured in the CI job output.
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 
 ---
 # risk-service -- Velocity and amount rules.
@@ -341,8 +353,12 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
-  successfulBuildsHistoryLimit: 3
-  failedBuildsHistoryLimit: 5
+  # Retention kept deliberately tight. At 3 successful + 5 failed across nine
+  # BuildConfigs this retained up to 72 build pods, which buried the console's
+  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # already captured in the CI job output.
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 
 ---
 # ledger-service -- Double-entry postings.
@@ -419,8 +435,12 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
-  successfulBuildsHistoryLimit: 3
-  failedBuildsHistoryLimit: 5
+  # Retention kept deliberately tight. At 3 successful + 5 failed across nine
+  # BuildConfigs this retained up to 72 build pods, which buried the console's
+  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # already captured in the CI job output.
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 
 ---
 # iso8583-adapter -- The REST/SOAP boundary and crypto edge.
@@ -497,8 +517,12 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
-  successfulBuildsHistoryLimit: 3
-  failedBuildsHistoryLimit: 5
+  # Retention kept deliberately tight. At 3 successful + 5 failed across nine
+  # BuildConfigs this retained up to 72 build pods, which buried the console's
+  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # already captured in the CI job output.
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 
 ---
 # ace-stub -- Stand-in for IBM ACE. Not deployed once entitled.
@@ -575,8 +599,12 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
-  successfulBuildsHistoryLimit: 3
-  failedBuildsHistoryLimit: 5
+  # Retention kept deliberately tight. At 3 successful + 5 failed across nine
+  # BuildConfigs this retained up to 72 build pods, which buried the console's
+  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # already captured in the CI job output.
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 
 ---
 # host-simulator -- Fake switch. dev/test namespaces only.
@@ -653,8 +681,12 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
-  successfulBuildsHistoryLimit: 3
-  failedBuildsHistoryLimit: 5
+  # Retention kept deliberately tight. At 3 successful + 5 failed across nine
+  # BuildConfigs this retained up to 72 build pods, which buried the console's
+  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # already captured in the CI job output.
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 
 ---
 # analytics-sync -- CronJob image: ledger to ClickHouse.
@@ -731,8 +763,12 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
-  successfulBuildsHistoryLimit: 3
-  failedBuildsHistoryLimit: 5
+  # Retention kept deliberately tight. At 3 successful + 5 failed across nine
+  # BuildConfigs this retained up to 72 build pods, which buried the console's
+  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # already captured in the CI job output.
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 
 ---
 # Shared secret for the GitHub webhook triggers above.

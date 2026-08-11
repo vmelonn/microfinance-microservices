@@ -1,0 +1,103 @@
+name: Cluster cleanup
+
+# Manual only. This is the escape hatch for when the namespace is wedged and
+# the OpenShift web terminal will not start -- which is exactly when you most
+# need a shell, because the web terminal is itself a pod and cannot be
+# scheduled once pending builds have consumed the pod quota.
+#
+# GitHub Actions already has `oc` and valid credentials, so it can reach the
+# cluster when nothing else can.
+#
+#   Actions -> Cluster cleanup -> Run workflow
+on:
+  workflow_dispatch:
+    inputs:
+      cancel_builds:
+        description: "Cancel Running/Pending builds (frees pod quota)"
+        type: boolean
+        default: true
+      prune_pods:
+        description: "Delete Completed/Failed/Error pods (clears the UI)"
+        type: boolean
+        default: true
+      prune_jobs:
+        description: "Delete finished Jobs from the CronJobs"
+        type: boolean
+        default: true
+
+jobs:
+  cleanup:
+    name: Clean up the namespace
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          oc: "4"
+
+      - uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
+          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
+          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
+          insecure_skip_tls_verify: true
+
+      - name: Before
+        run: |
+          echo "pods:  $(oc get pods --no-headers 2>/dev/null | wc -l)"
+          echo "--- by phase ---"
+          oc get pods --no-headers -o custom-columns=PHASE:.status.phase \
+            | sort | uniq -c | sed 's/^/  /'
+          echo "--- non-terminal builds (these hold quota) ---"
+          oc get builds --no-headers 2>/dev/null \
+            | grep -Ei "running|pending|new" | sed 's/^/  /' || echo "  none"
+
+      # FIRST, because this is what actually frees quota. Pending and Running
+      # pods are non-terminal and count against the namespace's pod budget;
+      # Completed ones do not.
+      - name: Cancel stuck builds
+        if: ${{ inputs.cancel_builds }}
+        run: |
+          STUCK=$(oc get builds --no-headers 2>/dev/null \
+                    | grep -Ei "running|pending|new" | awk '{print $1}' || true)
+          if [ -z "$STUCK" ]; then
+            echo "no builds to cancel"
+          else
+            echo "cancelling:"; echo "$STUCK" | sed 's/^/  /'
+            # shellcheck disable=SC2086
+            oc cancel-build $STUCK || true
+          fi
+
+      # Cosmetic but worth doing: terminal pods do not consume quota, they
+      # just bury the console's pod list and sit in etcd.
+      - name: Prune finished pods
+        if: ${{ inputs.prune_pods }}
+        run: |
+          for phase in Succeeded Failed; do
+            echo "deleting $phase pods"
+            oc delete pods --field-selector=status.phase==$phase --ignore-not-found || true
+          done
+
+      - name: Prune finished jobs
+        if: ${{ inputs.prune_jobs }}
+        run: |
+          # Deleting the Job removes its pods too. Only completed ones -- an
+          # in-flight analytics sync should be left to finish.
+          DONE=$(oc get jobs --no-headers 2>/dev/null \
+                   | awk '$2 ~ /1\/1/ {print $1}' || true)
+          if [ -z "$DONE" ]; then
+            echo "no completed jobs"
+          else
+            echo "$DONE" | sed 's/^/  /'
+            # shellcheck disable=SC2086
+            oc delete job $DONE || true
+          fi
+
+      - name: After
+        run: |
+          echo "pods:  $(oc get pods --no-headers 2>/dev/null | wc -l)"
+          echo "--- quota ---"
+          oc get quota -o wide 2>/dev/null || echo "  (no quota object on this namespace)"
+          echo "--- still running ---"
+          oc get pods --no-headers --field-selector=status.phase==Running \
+            | awk '{print "  " $1 "  " $3}'

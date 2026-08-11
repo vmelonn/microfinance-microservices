@@ -1,5 +1,5 @@
----
-# analytics-sync -- incremental ledger → ClickHouse load.
+﻿---
+# analytics-sync -- incremental ledger â†’ ClickHouse load.
 #
 # A CronJob, not a Deployment: it runs to completion and exits with a status
 # code. Same shape as the monolith's reconciliation job, and the right shape
@@ -29,9 +29,10 @@ spec:
   # the sync is watermark-driven and not tied to a time window.
   startingDeadlineSeconds: 300
 
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 5      # keep more failures -- those are the ones
-                                 # anyone will want the logs for
+  # analytics-sync runs every 15 minutes in dev, so generous history here
+  # means dozens of dead pods within an hour.
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
 
   jobTemplate:
     spec:
@@ -106,7 +107,7 @@ spec:
   timeZone: "UTC"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 10
+  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       backoffLimit: 0
