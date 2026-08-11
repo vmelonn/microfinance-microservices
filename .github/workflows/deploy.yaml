@@ -293,7 +293,36 @@ jobs:
           set -uo pipefail
           if oc start-build ${{ matrix.service }} --wait; then
             echo "build succeeded"
-            exit 0
+
+            # `--wait` returning means the BUILD finished, not that the
+            # ImageStream tag has moved. Those are separate steps and there is
+            # a window between them. A rollout in that window redeploys the
+            # PREVIOUS image and reports success, which is exactly how a green
+            # pipeline once shipped without the feature it was built for.
+            #
+            # So: block until the tag actually points at what this build
+            # produced. After this, a restart cannot pick up a stale image.
+            BUILD=$(oc get builds -l buildconfig=${{ matrix.service }}                       --sort-by=.metadata.creationTimestamp                       -o jsonpath='{.items[-1:].metadata.name}')
+            WANT=$(oc get build "$BUILD" -o jsonpath='{.status.output.to.imageDigest}')
+
+            if [ -z "$WANT" ]; then
+              echo "::warning::build $BUILD reported no output digest, skipping the tag check"
+              exit 0
+            fi
+
+            for i in $(seq 1 60); do
+              HAVE=$(oc get istag ${{ matrix.service }}:latest                        -o jsonpath='{.image.metadata.name}' 2>/dev/null || echo "")
+              if [ "$HAVE" = "$WANT" ]; then
+                echo "imagestream now points at $BUILD (${WANT:0:19}...)"
+                exit 0
+              fi
+              sleep 2
+            done
+
+            echo "::error::${{ matrix.service }}:latest never caught up with $BUILD"
+            echo "  build produced: $WANT"
+            echo "  tag points at:  $HAVE"
+            exit 1
           fi
 
           echo "::error::build failed for ${{ matrix.service }}"
