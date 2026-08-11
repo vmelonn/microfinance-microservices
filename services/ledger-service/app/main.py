@@ -92,6 +92,10 @@ class CreateAccountRequest(BaseModel):
     user_id: str
     card_number: str = Field(..., min_length=12, max_length=19)
     account_type: str = "checking"
+    # Stored so a payee can be resolved by phone number, which is how anyone
+    # actually sends money in a mobile wallet. Optional, because a merchant
+    # account has no subscriber behind it.
+    msisdn: str | None = None
 
 
 class PostingRequest(BaseModel):
@@ -118,7 +122,8 @@ class ResolveRequest(BaseModel):
 def create_account(body: CreateAccountRequest, request: Request):
     repo: LedgerRepository = request.app.state.repo
     try:
-        return repo.create_account(body.user_id, body.card_number, body.account_type)
+        return repo.create_account(body.user_id, body.card_number,
+                                   body.account_type, body.msisdn)
     except Exception as exc:
         if repo.db.is_unique_violation(exc):
             raise HTTPException(status_code=409, detail="That card number is already registered.")

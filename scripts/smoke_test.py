@@ -67,18 +67,18 @@ def check(label, condition, detail=""):
 
 
 def register(base):
-    cnic = str(uuid.uuid4().int)[:13]
+    msisdn = "03" + str(uuid.uuid4().int)[:9]
     card = "4" + str(uuid.uuid4().int)[:15]
     password = "a-real-password-123"
 
     status, body = call(base, "POST", "/users/register", {
-        "full_name": "Smoke Test", "cnic": cnic, "bind_card_number": card, "password": password,
+        "full_name": "Smoke Test", "msisdn": msisdn, "bind_card_number": card, "password": password,
     })
     if status != 200:
         print(f"{FAIL}  registration failed: {status} {body}")
         sys.exit(1)
 
-    status, token_body = call(base, "POST", "/auth/login", {"cnic": cnic, "password": password})
+    status, token_body = call(base, "POST", "/auth/login", {"msisdn": msisdn, "password": password})
     if status != 200:
         print(f"{FAIL}  login failed: {status} {token_body}")
         sys.exit(1)
@@ -98,9 +98,9 @@ def main():
     check("api-gateway ready", status == 200, json.dumps(ready))
 
     print("\n=== 1. register a merchant, so purchases have somewhere to credit ===")
-    merchant_cnic = str(uuid.uuid4().int)[:13]
+    merchant_msisdn = "03" + str(uuid.uuid4().int)[:9]
     status, _ = call(GATEWAY_1, "POST", "/users/register", {
-        "full_name": "Demo Merchant", "cnic": merchant_cnic,
+        "full_name": "Demo Merchant", "msisdn": merchant_msisdn,
         "bind_card_number": "merchant:demo", "password": "merchant-password-1",
     })
     check("merchant registered", status in (200, 409), "409 is fine, already exists")

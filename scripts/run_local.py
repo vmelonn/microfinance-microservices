@@ -213,20 +213,20 @@ def verify() -> int:
 
     print("\n--- register merchant + cardholder ---")
     status, _ = call("POST", "/users/register", {
-        "full_name": "Demo Merchant", "cnic": str(uuid.uuid4().int)[:13],
+        "full_name": "Demo Merchant", "msisdn": "03" + str(uuid.uuid4().int)[:9],
         "bind_card_number": "merchant:demo", "password": "merchant-password-1",
     })
     check("merchant registered", status in (200, 409), str(status))
 
-    cnic = str(uuid.uuid4().int)[:13]
+    msisdn = "03" + str(uuid.uuid4().int)[:9]
     card = "4" + str(uuid.uuid4().int)[:15]
     status, reg = call("POST", "/users/register", {
-        "full_name": "Local Runner", "cnic": cnic,
+        "full_name": "Local Runner", "msisdn": msisdn,
         "bind_card_number": card, "password": "a-real-password-123",
     })
     check("cardholder registered", status == 200, f"{status} {reg}")
 
-    status, tok = call("POST", "/auth/login", {"cnic": cnic, "password": "a-real-password-123"})
+    status, tok = call("POST", "/auth/login", {"msisdn": msisdn, "password": "a-real-password-123"})
     check("login issued a token", status == 200 and "access_token" in tok, f"{status} {tok}")
     token = tok.get("access_token")
 
@@ -260,12 +260,12 @@ def verify() -> int:
     check("mismatched body rejected", status == 400, f"got {status}")
 
     print("\n--- authorization ---")
-    other_cnic = str(uuid.uuid4().int)[:13]
+    other_msisdn = "03" + str(uuid.uuid4().int)[:9]
     call("POST", "/users/register", {
-        "full_name": "Someone Else", "cnic": other_cnic,
+        "full_name": "Someone Else", "msisdn": other_msisdn,
         "bind_card_number": "4" + str(uuid.uuid4().int)[:15], "password": "another-password-1",
     })
-    _, other_tok = call("POST", "/auth/login", {"cnic": other_cnic, "password": "another-password-1"})
+    _, other_tok = call("POST", "/auth/login", {"msisdn": other_msisdn, "password": "another-password-1"})
     status, _ = call("POST", "/transactions/purchase", {
         "amount": 10.0, "card_number": card, "pin": "1234",
         "idempotency_key": f"authz-{uuid.uuid4().hex[:10]}",
@@ -276,13 +276,13 @@ def verify() -> int:
     check("unauthenticated request refused", status == 401, f"got {status}")
 
     print("\n--- risk velocity escalates ---")
-    vel_cnic = str(uuid.uuid4().int)[:13]
+    vel_msisdn = "03" + str(uuid.uuid4().int)[:9]
     vel_card = "4" + str(uuid.uuid4().int)[:15]
     call("POST", "/users/register", {
-        "full_name": "Velocity Test", "cnic": vel_cnic,
+        "full_name": "Velocity Test", "msisdn": vel_msisdn,
         "bind_card_number": vel_card, "password": "velocity-password-1",
     })
-    _, vt = call("POST", "/auth/login", {"cnic": vel_cnic, "password": "velocity-password-1"})
+    _, vt = call("POST", "/auth/login", {"msisdn": vel_msisdn, "password": "velocity-password-1"})
     outcomes = []
     for _ in range(7):
         _, body = call("POST", "/transactions/purchase", {
@@ -293,6 +293,49 @@ def verify() -> int:
     print(f"        {' -> '.join(str(o) for o in outcomes)}")
     check("velocity escalated to review or decline",
           any(o in ("review", "decline") for o in outcomes), str(outcomes))
+
+    print("\n--- transfer to a PHONE NUMBER ---")
+    # The MSISDN is the account. This proves a payee resolves by the number a
+    # customer would actually type rather than only by an opaque acc_ id, and
+    # that normalisation agrees across services: auth-service stores the
+    # number, ledger-service looks it up, and if those two disagree by one
+    # character registration succeeds while every transfer silently misses.
+    peer_msisdn = "0300" + str(uuid.uuid4().int)[:7]
+    peer_card = "4" + str(uuid.uuid4().int)[:15]
+    status, peer = call("POST", "/users/register", {
+        "full_name": "Peer", "msisdn": peer_msisdn,
+        "bind_card_number": peer_card, "password": "a-real-password-123",
+    })
+    check("recipient registered by phone number", status == 200, str(peer))
+
+    # Deliberately sent to a DIFFERENT spelling of the same number than the
+    # one registered. Both must normalise to one stored value.
+    spaced = f"{peer_msisdn[:4]} {peer_msisdn[4:7]} {peer_msisdn[7:]}"
+    status, transfer = call("POST", "/transactions/transfer", {
+        "amount": 7.50, "sender_card_number": card, "sender_pin": "1234",
+        "recipient_account": spaced,
+        "idempotency_key": f"xfer-{uuid.uuid4().hex[:10]}",
+    }, token=token)
+    check("transfer to a differently formatted number approved",
+          status == 200 and transfer.get("status") == "approved",
+          f"{status} {transfer}")
+
+    # Checked against the ledger rather than the balance endpoint, because the
+    # sender's token cannot read the recipient's balance. That refusal is
+    # correct behaviour, not an obstacle to work around.
+    #
+    # Matched on the NORMALISED number that registration returned, not on the
+    # "0300..." that was typed. Those differ by design, and comparing the raw
+    # form here would fail while the platform was working correctly, which is
+    # what happened the first time this check was written.
+    stored = peer.get("msisdn")
+    status, listing = call("GET", "/internal/ledger/inspect/accounts",
+                           base="http://127.0.0.1:8084")
+    credited = [a for a in listing.get("accounts", []) if a.get("msisdn") == stored]
+    check(f"recipient {stored} credited 750 cents",
+          bool(credited) and credited[0]["balance_cents"] == 750,
+          f"looked for {stored!r} among "
+          f"{[a.get('msisdn') for a in listing.get('accounts', [])][:5]}")
 
     print("\n--- the ledger balances ---")
     status, integrity = call("GET", "/internal/ledger/integrity", base="http://127.0.0.1:8084")

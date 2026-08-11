@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 
 from mfcommon.db.dialect import Database, utc_now_param
+from mfcommon.identity.msisdn import is_msisdn, normalise
 
 
 class AccountNotFound(Exception):
@@ -47,6 +48,14 @@ class LedgerRepository:
                 CREATE TABLE IF NOT EXISTS accounts (
                     account_id  TEXT PRIMARY KEY,
                     user_id     TEXT NOT NULL,
+                    -- The customer's phone number, stored normalised. Held
+                    -- here as well as in auth-service's users table, which
+                    -- looks like duplication and is not: this service cannot
+                    -- query that database, and resolving a payee by phone
+                    -- number is a ledger operation. It is a deliberate copy
+                    -- across a service boundary, kept in step because only
+                    -- registration writes it.
+                    msisdn      TEXT,
                     type        TEXT NOT NULL DEFAULT 'checking',
                     created_at  {ts} NOT NULL
                 )
@@ -84,24 +93,56 @@ class LedgerRepository:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cards_account ON cards(account_id)"
             )
+            # Every transfer to a phone number hits this, so it is not
+            # optional at any real volume.
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_accounts_msisdn ON accounts(msisdn)"
+            )
+            self._migrate_add_msisdn(cur)
+
+    def _migrate_add_msisdn(self, cur) -> None:
+        """
+        CREATE TABLE IF NOT EXISTS does nothing to an accounts table that
+        already exists, so a database created before MSISDNs would silently
+        lack the column and every transfer to a phone number would fail.
+
+        Existing rows get NULL, which resolves to nothing rather than to the
+        wrong account. Those customers can be paid by account ID or card until
+        they re-register.
+        """
+        if self.db.is_postgres:
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'accounts'
+            """)
+            columns = {r[0] for r in cur.fetchall()}
+        else:
+            cur.execute("PRAGMA table_info(accounts)")
+            columns = {r[1] for r in cur.fetchall()}
+
+        if "msisdn" not in columns:
+            cur.execute("ALTER TABLE accounts ADD COLUMN msisdn TEXT")
 
     #, identity -----------------------------------------------------------
 
-    def create_account(self, user_id: str, card_number: str, account_type: str = "checking") -> dict:
+    def create_account(self, user_id: str, card_number: str, account_type: str = "checking",
+                       msisdn: str | None = None) -> dict:
         account_id = f"acc_{uuid.uuid4().hex[:12]}"
         now = utc_now_param()
 
         with self.db.transaction() as conn:
             cur = conn.cursor()
             cur.execute(
-                self.db.sql("INSERT INTO accounts (account_id, user_id, type, created_at) VALUES (?, ?, ?, ?)"),
-                (account_id, user_id, account_type, now),
+                self.db.sql("INSERT INTO accounts (account_id, user_id, msisdn, type, created_at) "
+                            "VALUES (?, ?, ?, ?, ?)"),
+                (account_id, user_id, msisdn, account_type, now),
             )
             cur.execute(
                 self.db.sql("INSERT INTO cards (card_number, account_id) VALUES (?, ?)"),
                 (card_number, account_id),
             )
-        return {"account_id": account_id, "user_id": user_id, "card_number": card_number}
+        return {"account_id": account_id, "user_id": user_id,
+                "card_number": card_number, "msisdn": msisdn}
 
     def resolve_account(self, identifier: str) -> str | None:
         """
@@ -122,7 +163,23 @@ class LedgerRepository:
                 self.db.sql("SELECT account_id FROM accounts WHERE account_id = ?"), (identifier,)
             )
             row = cur.fetchone()
-            return row[0] if row else None
+            if row:
+                return row[0]
+
+            # Finally a phone number. LAST on purpose: a 12 to 15 digit card
+            # number is indistinguishable from an MSISDN by length, so trying
+            # this first could route a payment to whichever account happened
+            # to match. Cards are checked first and this is the fallback.
+            if is_msisdn(identifier):
+                cur.execute(
+                    self.db.sql("SELECT account_id FROM accounts WHERE msisdn = ?"),
+                    (normalise(identifier),),
+                )
+                row = cur.fetchone()
+                if row:
+                    return row[0]
+
+            return None
 
     def owner_of(self, account_id: str) -> str | None:
         with self.db.cursor() as cur:
@@ -280,7 +337,7 @@ class LedgerRepository:
     def list_accounts(self, limit: int = 100) -> list[dict]:
         with self.db.cursor() as cur:
             cur.execute(self.db.sql(f"""
-                SELECT a.account_id, a.user_id, a.type, a.created_at,
+                SELECT a.account_id, a.user_id, a.msisdn, a.type, a.created_at,
                        (SELECT COUNT(*) FROM cards c WHERE c.account_id = a.account_id) AS cards,
                        COALESCE((
                            SELECT SUM(CASE WHEN entry_type='credit' THEN amount_cents
@@ -292,9 +349,9 @@ class LedgerRepository:
                 LIMIT {int(limit)}
             """))
             return [
-                {"account_id": r[0], "user_id": r[1], "type": r[2],
-                 "created_at": str(r[3]), "cards": int(r[4]),
-                 "balance_cents": int(r[5])}
+                {"account_id": r[0], "user_id": r[1], "msisdn": r[2],
+                 "type": r[3], "created_at": str(r[4]), "cards": int(r[5]),
+                 "balance_cents": int(r[6])}
                 for r in cur.fetchall()
             ]
 

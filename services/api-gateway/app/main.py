@@ -36,6 +36,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from mfcommon.auth.tokens import TokenError, decode_token
+from mfcommon.identity.msisdn import InvalidMsisdn, normalise
 from mfcommon.http.client import ServiceCallError, ServiceClient, ServiceRejectedError
 from mfcommon.observability import trace
 from mfcommon.observability.correlation import (
@@ -171,13 +172,15 @@ def current_user(request: Request, authorization: str = Header(None)) -> dict:
 
 class RegisterRequest(BaseModel):
     full_name: str
-    cnic: str = Field(..., min_length=13, max_length=13)
+    # The MSISDN is the account. Any format the customer might type is
+    # accepted and normalised to one stored value.
+    msisdn: str = Field(..., min_length=8, max_length=20)
     bind_card_number: str = Field(..., min_length=12, max_length=19)
     password: str = Field(..., min_length=8)
 
 
 class LoginRequest(BaseModel):
-    cnic: str = Field(..., min_length=13, max_length=13)
+    msisdn: str = Field(..., min_length=8, max_length=20)
     password: str
 
 
@@ -226,7 +229,7 @@ def register(body: RegisterRequest, request: Request):
     try:
         user = state.auth.post(
             "/internal/auth/users",
-            {"full_name": body.full_name, "cnic": body.cnic, "password": body.password},
+            {"full_name": body.full_name, "msisdn": body.msisdn, "password": body.password},
             retries=0,  # not idempotent: a retry creates a second user
         )
     except ServiceRejectedError as exc:
@@ -237,7 +240,11 @@ def register(body: RegisterRequest, request: Request):
     try:
         account = state.ledger.post(
             "/internal/ledger/accounts",
-            {"user_id": user["user_id"], "card_number": body.bind_card_number},
+            {"user_id": user["user_id"], "card_number": body.bind_card_number,
+             # auth-service returns the normalised form. Passing the raw input
+             # instead would store two different spellings of one number and
+             # every transfer to it would miss.
+             "msisdn": user.get("msisdn")},
             retries=0,
         )
     except (ServiceRejectedError, ServiceCallError) as exc:
@@ -259,6 +266,7 @@ def register(body: RegisterRequest, request: Request):
     return {
         "status": "success",
         "user_id": user["user_id"],
+        "msisdn": user.get("msisdn"),
         "account_id": account["account_id"],
         "message": "User registered, wallet created, and card bound.",
     }
@@ -268,7 +276,7 @@ def register(body: RegisterRequest, request: Request):
 def login(body: LoginRequest, request: Request):
     try:
         return request.app.state.auth.post(
-            "/internal/auth/login", {"cnic": body.cnic, "password": body.password}, retries=0
+            "/internal/auth/login", {"msisdn": body.msisdn, "password": body.password}, retries=0
         )
     except ServiceRejectedError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))

@@ -144,8 +144,9 @@
 
     <div class="card">
       <h2>1. Account</h2>
-      <label for="cnic">CNIC (13 digits)</label>
-      <input id="cnic" maxlength="13" placeholder="auto-generated">
+      <label for="msisdn">Phone number</label>
+      <input id="msisdn" placeholder="0300 123 4567">
+      <span class="muted">Your number is your account. Any format works.</span>
       <label for="pw">Password</label>
       <input id="pw" type="password" value="a-real-password-123">
       <div class="row">
@@ -182,6 +183,10 @@
         <button class="go ghost" id="btn-newkey">New</button>
       </div>
       <div class="note">
+        Credits <code>merchant:demo</code>, a single hardcoded merchant. A real
+        acquirer would take the payee from DE 42 on the transaction; this
+        platform inherited the shortcut from the monolith.
+        <br><br>
         Pay twice with the <strong>same</strong> key to see the cached reply and
         an unchanged balance. That is the guarantee, not a caching detail.
       </div>
@@ -193,6 +198,39 @@
       <div id="result"><p class="muted">No transaction yet.</p></div>
       <button class="go ghost" id="btn-balance" style="margin-top:.6rem">Check balance</button>
       <div id="balance"></div>
+    </div>
+
+    <div class="card">
+      <h2>4. Send to another user</h2>
+      <div class="note">
+        Send to a phone number, the way a mobile wallet works. A different
+        path from a purchase: processing code <code>400000</code> instead of
+        <code>000000</code>, and the recipient travels in <strong>DE 103</strong>
+        rather than crediting the merchant. An account ID or card number also
+        resolves, since the ledger tries card, then account, then phone.
+      </div>
+
+      <label for="peer">Recipient phone number</label>
+      <div class="row">
+        <input id="peer" placeholder="0300 123 4567">
+        <button class="go ghost" id="btn-peer-new">Create one</button>
+      </div>
+      <select id="peer-pick" style="margin-top:.4rem">
+        <option value="">or pick an existing account...</option>
+      </select>
+
+      <div class="row">
+        <div><label for="t-amt">Amount</label><input id="t-amt" type="number" step="0.01" value="10.00"></div>
+        <div><label for="t-pin">Your PIN</label><input id="t-pin" value="1234" maxlength="12"></div>
+      </div>
+
+      <label for="t-idem">Idempotency key</label>
+      <div class="row">
+        <input id="t-idem">
+        <button class="go ghost" id="btn-t-newkey">New</button>
+      </div>
+
+      <button class="go" id="btn-send">Send</button>
     </div>
 
   </div>
@@ -304,7 +342,7 @@
 <script>
 "use strict";
 
-const S = { token:null, userId:null, card:null, cnic:null, lastKey:null, lastCid:null, stop:false };
+const S = { token:null, userId:null, card:null, msisdn:null, lastKey:null, lastCid:null, stop:false };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const cents = c => (c/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
@@ -337,30 +375,36 @@ newKey();
 
 function renderSession() {
   $("session-kv").innerHTML = S.token
-    ? `<dt>user</dt><dd>${esc(S.userId)}</dd><dt>card</dt><dd>${esc(S.card||"-")}</dd>`
+    ? `<dt>phone</dt><dd>${esc(S.msisdn||"-")}</dd><dt>card</dt><dd>${esc(S.card||"-")}</dd>`
     : "";
-  $("who").textContent = S.token ? `signed in ${S.userId}` : "not signed in";
+  // The phone number, not usr_982fb38249aa. The UUID is a database key and
+  // has no business being the thing a person reads.
+  $("who").textContent = S.token ? `signed in ${S.msisdn||S.userId}` : "not signed in";
 }
 
 $("btn-register").onclick = async () => {
-  const cnic = $("cnic").value.trim() || String(Date.now()).padStart(13,"0").slice(-13);
+  // A random Pakistani mobile number when the field is blank, so the demo
+  // needs no typing and two runs never collide.
+  const msisdn = $("msisdn").value.trim() ||
+    "03" + String(Math.floor(Math.random()*1e9)).padStart(9,"0");
   const card = "4" + String(Date.now()).slice(-9) + Math.floor(Math.random()*1e6);
-  $("cnic").value = cnic;
+  $("msisdn").value = msisdn;
   const r = await api("POST","/users/register",
-    {full_name:"Console User", cnic, bind_card_number:card, password:$("pw").value});
+    {full_name:"Console User", msisdn, bind_card_number:card, password:$("pw").value});
   if (r.status !== 200) return showResult(r);
-  S.cnic = cnic; S.card = card; $("card").value = card;
-  await doLogin(cnic);
+  S.msisdn = r.data.msisdn || msisdn; S.card = card; $("card").value = card;
+  await doLogin(msisdn);
 };
 
-$("btn-login").onclick = () => doLogin($("cnic").value.trim());
+$("btn-login").onclick = () => doLogin($("msisdn").value.trim());
 
-async function doLogin(cnic) {
-  const r = await api("POST","/auth/login",{cnic, password:$("pw").value});
+async function doLogin(msisdn) {
+  const r = await api("POST","/auth/login",{msisdn, password:$("pw").value});
   if (r.status !== 200) return showResult(r);
   S.token = r.data.access_token; S.userId = r.data.user_id;
   renderSession();
   checkMerchant();
+  loadPeers();
 }
 
 async function checkMerchant() {
@@ -372,7 +416,7 @@ async function checkMerchant() {
 
 $("btn-merchant").onclick = async () => {
   const r = await api("POST","/users/register",{
-    full_name:"Demo Merchant", cnic:String(Date.now()+1).slice(-13),
+    full_name:"Demo Merchant", msisdn:"0300" + String(Date.now()).slice(-7),
     bind_card_number:"merchant:demo", password:"merchant-password-1"});
   $("merchant-note").hidden = (r.status === 200 || r.status === 409);
 };
@@ -419,6 +463,64 @@ window.jumpToTrace = cid => {
   document.querySelector('nav.tabs button[data-tab=trace]').click();
   $("cid").value = cid;
   loadTrace(cid);
+};
+
+/* ------------------------------ transfers -------------------------------- */
+const newTKey = () => $("t-idem").value = "tx-" + Math.random().toString(36).slice(2,12);
+$("btn-t-newkey").onclick = newTKey;
+newTKey();
+
+// Registering a counterparty from here, because a transfer needs someone to
+// transfer TO and a fresh namespace has nobody. Registers a second user, then
+// switches the session straight back to yours: the console tracks one login,
+// and silently leaving you signed in as the recipient would be a trap.
+$("btn-peer-new").onclick = async () => {
+  const myMsisdn = S.msisdn, myCard = S.card, myToken = S.token, myUser = S.userId;
+  const msisdn = "03" + String(Math.floor(Math.random()*1e9)).padStart(9,"0");
+  const card = "4" + String(Date.now()+7).slice(-9) + Math.floor(Math.random()*1e6);
+
+  const r = await api("POST","/users/register",
+    {full_name:"Counterparty", msisdn, bind_card_number:card, password:"a-real-password-123"});
+  if (r.status !== 200) return showResult(r);
+
+  $("peer").value = r.data.msisdn || msisdn;
+  S.token = myToken; S.userId = myUser; S.msisdn = myMsisdn; S.card = myCard;
+  renderSession();
+  await loadPeers();
+};
+
+async function loadPeers() {
+  const r = await api("GET","/console/ledger/accounts");
+  const sel = $("peer-pick");
+  sel.length = 1;
+  (r.data.accounts || []).forEach(a => {
+    // Your own account is not a valid recipient: the API rejects a
+    // self-transfer, since it would post a debit and a credit to the same
+    // account and leave the balance unchanged.
+    const mine = a.user_id === S.userId;
+    const label = a.msisdn ? a.msisdn : a.account_id;   // merchants have no number
+    sel.add(new Option(
+      `${label}  ${(a.balance_cents/100).toFixed(2)}${mine ? "  (you)" : ""}`,
+      a.msisdn || a.account_id));
+    if (mine) sel.options[sel.length-1].disabled = true;
+  });
+}
+$("peer-pick").onchange = () => { if ($("peer-pick").value) $("peer").value = $("peer-pick").value; };
+
+$("btn-send").onclick = async () => {
+  if (!S.token) return showResult({status:0, data:{detail:"Register or log in first."}});
+  if (!$("peer").value.trim()) return showResult({status:0, data:{detail:"Pick a recipient first."}});
+  $("btn-send").disabled = true;
+  const t0 = performance.now();
+  const r = await api("POST","/transactions/transfer",{
+    amount: parseFloat($("t-amt").value),
+    sender_card_number: $("card").value.trim(),
+    sender_pin: $("t-pin").value,
+    recipient_account: $("peer").value.trim(),
+    idempotency_key: $("t-idem").value,
+  });
+  showResult(r, Math.round(performance.now()-t0));
+  $("btn-send").disabled = false;
 };
 
 $("btn-balance").onclick = async () => {
@@ -477,7 +579,7 @@ function renderTable(el, cols, rows) {
 $("btn-accounts").onclick = async () => {
   const r = await api("GET","/console/ledger/accounts");
   const rows = (r.data.accounts||[]).map(a => ({...a, balance: cents(a.balance_cents)}));
-  renderTable($("ledger-out"), ["account_id","user_id","type","cards","balance","created_at"], rows);
+  renderTable($("ledger-out"), ["msisdn","balance","cards","type","account_id","created_at"], rows);
 };
 $("btn-txns").onclick = async () => {
   const r = await api("GET","/console/ledger/transactions?limit=50");

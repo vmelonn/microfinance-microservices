@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 from mfcommon.auth.passwords import hash_password, verify_password
 from mfcommon.auth.tokens import TokenError, create_token, decode_token
 from mfcommon.db.dialect import Database, utc_now_param
+from mfcommon.identity.msisdn import InvalidMsisdn, mask, normalise
 from mfcommon.observability import trace
 from mfcommon.observability.correlation import (
     CORRELATION_HEADER,
@@ -65,15 +66,43 @@ if JWT_SECRET == _DEV_SECRET:
 
 def _init_schema(db: Database) -> None:
     with db.transaction() as conn:
-        conn.cursor().execute(f"""
+        cur = conn.cursor()
+        cur.execute(f"""
             CREATE TABLE IF NOT EXISTS users (
                 user_id       TEXT PRIMARY KEY,
                 full_name     TEXT NOT NULL,
-                cnic          TEXT UNIQUE NOT NULL,
+                msisdn        TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 created_at    {db.timestamp_type} NOT NULL
             )
         """)
+        _migrate_cnic_to_msisdn(db, cur)
+
+
+def _migrate_cnic_to_msisdn(db: Database, cur) -> None:
+    """
+    CREATE TABLE IF NOT EXISTS does nothing to a users table that already has
+    a cnic column, so an existing database would keep the old identifier and
+    every login would fail on a column that is not there.
+
+    Renamed rather than dropped: the values are real customers. They are NOT
+    re-normalised into MSISDN form, because a CNIC is not a phone number and
+    pretending otherwise would invent numbers that belong to somebody else.
+    Those rows keep whatever they had and simply will not match a phone-number
+    login, which is the honest outcome.
+    """
+    if db.is_postgres:
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'users'
+        """)
+        columns = {r[0] for r in cur.fetchall()}
+    else:
+        cur.execute("PRAGMA table_info(users)")
+        columns = {r[1] for r in cur.fetchall()}
+
+    if "cnic" in columns and "msisdn" not in columns:
+        cur.execute("ALTER TABLE users RENAME COLUMN cnic TO msisdn")
 
 
 @asynccontextmanager
@@ -123,7 +152,10 @@ async def adopt_correlation_id(request: Request, call_next):
 
 class RegisterRequest(BaseModel):
     full_name: str = Field(..., min_length=1)
-    cnic: str = Field(..., min_length=13, max_length=13)
+    # The MSISDN is the customer identifier, not a contact detail. Accepted in
+    # any format the customer might type and normalised to one stored form,
+    # because "0300 123 4567" and "+923001234567" are one subscriber.
+    msisdn: str = Field(..., min_length=8, max_length=20)
     # Login password, NOT the card PIN. The two are deliberately separate
     # secrets: this one is verified locally by us, the PIN is verified by
     # the switch at transaction time. Conflating them would mean one
@@ -132,7 +164,7 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    cnic: str = Field(..., min_length=13, max_length=13)
+    msisdn: str = Field(..., min_length=8, max_length=20)
     password: str
 
 
@@ -157,21 +189,26 @@ def register(body: RegisterRequest, request: Request):
     user_id = f"usr_{uuid.uuid4().hex[:12]}"
 
     try:
+        msisdn = normalise(body.msisdn)
+    except InvalidMsisdn as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
         with db.transaction() as conn:
             conn.cursor().execute(
                 db.sql(
-                    "INSERT INTO users (user_id, full_name, cnic, password_hash, created_at) "
+                    "INSERT INTO users (user_id, full_name, msisdn, password_hash, created_at) "
                     "VALUES (?, ?, ?, ?, ?)"
                 ),
-                (user_id, body.full_name, body.cnic, hash_password(body.password), utc_now_param()),
+                (user_id, body.full_name, msisdn, hash_password(body.password), utc_now_param()),
             )
     except Exception as exc:
         if db.is_unique_violation(exc):
-            raise HTTPException(status_code=409, detail="A user with that CNIC already exists.")
+            raise HTTPException(status_code=409, detail="That phone number is already registered.")
         raise
 
-    log.info(f"registered user_id={user_id}")
-    return {"user_id": user_id, "full_name": body.full_name}
+    log.info(f"registered user_id={user_id} msisdn={mask(msisdn)}")
+    return {"user_id": user_id, "full_name": body.full_name, "msisdn": msisdn}
 
 
 @app.delete("/internal/auth/users/{user_id}")
@@ -195,15 +232,22 @@ def delete_user(user_id: str, request: Request):
 @app.post("/internal/auth/login", response_model=TokenResponse)
 def login(body: LoginRequest, request: Request):
     db: Database = request.app.state.db
+    try:
+        msisdn = normalise(body.msisdn)
+    except InvalidMsisdn as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     with db.cursor() as cur:
-        cur.execute(db.sql("SELECT user_id, password_hash FROM users WHERE cnic = ?"), (body.cnic,))
+        cur.execute(db.sql("SELECT user_id, password_hash FROM users WHERE msisdn = ?"), (msisdn,))
         row = cur.fetchone()
 
     # Identical error for "no such user" and "wrong password". Distinguishing
-    # them turns this endpoint into a CNIC enumeration oracle.
+    # them turns this endpoint into a phone-number enumeration oracle,
+    # which matters more for an MSISDN than a CNIC: the number space is
+    # small and guessable.
     if row is None or not verify_password(body.password, row[1]):
         log.warning("failed login attempt")
-        raise HTTPException(status_code=401, detail="Invalid CNIC or password.")
+        raise HTTPException(status_code=401, detail="Invalid phone number or password.")
 
     user_id = row[0]
     token = create_token({"sub": user_id}, secret=JWT_SECRET, expires_in_seconds=TOKEN_LIFETIME)
