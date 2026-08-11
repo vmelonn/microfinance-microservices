@@ -1,4 +1,4 @@
-# In-cluster image builds, from Git.
+﻿# In-cluster image builds, from Git.
 #
 #     oc apply -f openshift/build/build.yaml
 #     bash scripts/openshift-build.sh
@@ -82,14 +82,31 @@ spec:
       github:
         secretReference:
           name: github-webhook-secret
+  # A stuck build FAILS instead of hanging forever.
+  #
+  # Without this, a build pod that never gets scheduled -- because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Pending indefinitely, and `oc start-build --follow` waits for logs that
+  # never arrive. That is how a CI job burns five hours and is then killed by
+  # GitHub's own limit with nothing useful in the log.
+  #
+  # The deadline covers time spent Pending, not just running -- which is
+  # exactly the case that needs catching.
+  completionDeadlineSeconds: 900     # 15 minutes
+
   resources:
-    # Builds are short-lived but pip-heavy. Too little memory and the build
-    # pod is OOM-killed with a message about the compiler, not about memory.
+    # Sized DOWN deliberately. These are modest pip installs, and the previous
+    # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
+    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # the scheduler refused and every build hung.
+    #
+    # Not a floor to keep lowering: too little and the build is OOM-killed
+    # with a message about the compiler rather than about memory.
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: 100m
+      memory: 256Mi
     limits:
-      memory: 2Gi
+      memory: 1Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
 
@@ -143,14 +160,31 @@ spec:
       github:
         secretReference:
           name: github-webhook-secret
+  # A stuck build FAILS instead of hanging forever.
+  #
+  # Without this, a build pod that never gets scheduled -- because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Pending indefinitely, and `oc start-build --follow` waits for logs that
+  # never arrive. That is how a CI job burns five hours and is then killed by
+  # GitHub's own limit with nothing useful in the log.
+  #
+  # The deadline covers time spent Pending, not just running -- which is
+  # exactly the case that needs catching.
+  completionDeadlineSeconds: 900     # 15 minutes
+
   resources:
-    # Builds are short-lived but pip-heavy. Too little memory and the build
-    # pod is OOM-killed with a message about the compiler, not about memory.
+    # Sized DOWN deliberately. These are modest pip installs, and the previous
+    # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
+    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # the scheduler refused and every build hung.
+    #
+    # Not a floor to keep lowering: too little and the build is OOM-killed
+    # with a message about the compiler rather than about memory.
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: 100m
+      memory: 256Mi
     limits:
-      memory: 2Gi
+      memory: 1Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
 
@@ -204,14 +238,31 @@ spec:
       github:
         secretReference:
           name: github-webhook-secret
+  # A stuck build FAILS instead of hanging forever.
+  #
+  # Without this, a build pod that never gets scheduled -- because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Pending indefinitely, and `oc start-build --follow` waits for logs that
+  # never arrive. That is how a CI job burns five hours and is then killed by
+  # GitHub's own limit with nothing useful in the log.
+  #
+  # The deadline covers time spent Pending, not just running -- which is
+  # exactly the case that needs catching.
+  completionDeadlineSeconds: 900     # 15 minutes
+
   resources:
-    # Builds are short-lived but pip-heavy. Too little memory and the build
-    # pod is OOM-killed with a message about the compiler, not about memory.
+    # Sized DOWN deliberately. These are modest pip installs, and the previous
+    # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
+    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # the scheduler refused and every build hung.
+    #
+    # Not a floor to keep lowering: too little and the build is OOM-killed
+    # with a message about the compiler rather than about memory.
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: 100m
+      memory: 256Mi
     limits:
-      memory: 2Gi
+      memory: 1Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
 
@@ -265,14 +316,31 @@ spec:
       github:
         secretReference:
           name: github-webhook-secret
+  # A stuck build FAILS instead of hanging forever.
+  #
+  # Without this, a build pod that never gets scheduled -- because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Pending indefinitely, and `oc start-build --follow` waits for logs that
+  # never arrive. That is how a CI job burns five hours and is then killed by
+  # GitHub's own limit with nothing useful in the log.
+  #
+  # The deadline covers time spent Pending, not just running -- which is
+  # exactly the case that needs catching.
+  completionDeadlineSeconds: 900     # 15 minutes
+
   resources:
-    # Builds are short-lived but pip-heavy. Too little memory and the build
-    # pod is OOM-killed with a message about the compiler, not about memory.
+    # Sized DOWN deliberately. These are modest pip installs, and the previous
+    # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
+    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # the scheduler refused and every build hung.
+    #
+    # Not a floor to keep lowering: too little and the build is OOM-killed
+    # with a message about the compiler rather than about memory.
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: 100m
+      memory: 256Mi
     limits:
-      memory: 2Gi
+      memory: 1Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
 
@@ -326,14 +394,31 @@ spec:
       github:
         secretReference:
           name: github-webhook-secret
+  # A stuck build FAILS instead of hanging forever.
+  #
+  # Without this, a build pod that never gets scheduled -- because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Pending indefinitely, and `oc start-build --follow` waits for logs that
+  # never arrive. That is how a CI job burns five hours and is then killed by
+  # GitHub's own limit with nothing useful in the log.
+  #
+  # The deadline covers time spent Pending, not just running -- which is
+  # exactly the case that needs catching.
+  completionDeadlineSeconds: 900     # 15 minutes
+
   resources:
-    # Builds are short-lived but pip-heavy. Too little memory and the build
-    # pod is OOM-killed with a message about the compiler, not about memory.
+    # Sized DOWN deliberately. These are modest pip installs, and the previous
+    # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
+    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # the scheduler refused and every build hung.
+    #
+    # Not a floor to keep lowering: too little and the build is OOM-killed
+    # with a message about the compiler rather than about memory.
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: 100m
+      memory: 256Mi
     limits:
-      memory: 2Gi
+      memory: 1Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
 
@@ -387,14 +472,31 @@ spec:
       github:
         secretReference:
           name: github-webhook-secret
+  # A stuck build FAILS instead of hanging forever.
+  #
+  # Without this, a build pod that never gets scheduled -- because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Pending indefinitely, and `oc start-build --follow` waits for logs that
+  # never arrive. That is how a CI job burns five hours and is then killed by
+  # GitHub's own limit with nothing useful in the log.
+  #
+  # The deadline covers time spent Pending, not just running -- which is
+  # exactly the case that needs catching.
+  completionDeadlineSeconds: 900     # 15 minutes
+
   resources:
-    # Builds are short-lived but pip-heavy. Too little memory and the build
-    # pod is OOM-killed with a message about the compiler, not about memory.
+    # Sized DOWN deliberately. These are modest pip installs, and the previous
+    # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
+    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # the scheduler refused and every build hung.
+    #
+    # Not a floor to keep lowering: too little and the build is OOM-killed
+    # with a message about the compiler rather than about memory.
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: 100m
+      memory: 256Mi
     limits:
-      memory: 2Gi
+      memory: 1Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
 
@@ -448,14 +550,31 @@ spec:
       github:
         secretReference:
           name: github-webhook-secret
+  # A stuck build FAILS instead of hanging forever.
+  #
+  # Without this, a build pod that never gets scheduled -- because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Pending indefinitely, and `oc start-build --follow` waits for logs that
+  # never arrive. That is how a CI job burns five hours and is then killed by
+  # GitHub's own limit with nothing useful in the log.
+  #
+  # The deadline covers time spent Pending, not just running -- which is
+  # exactly the case that needs catching.
+  completionDeadlineSeconds: 900     # 15 minutes
+
   resources:
-    # Builds are short-lived but pip-heavy. Too little memory and the build
-    # pod is OOM-killed with a message about the compiler, not about memory.
+    # Sized DOWN deliberately. These are modest pip installs, and the previous
+    # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
+    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # the scheduler refused and every build hung.
+    #
+    # Not a floor to keep lowering: too little and the build is OOM-killed
+    # with a message about the compiler rather than about memory.
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: 100m
+      memory: 256Mi
     limits:
-      memory: 2Gi
+      memory: 1Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
 
@@ -509,14 +628,31 @@ spec:
       github:
         secretReference:
           name: github-webhook-secret
+  # A stuck build FAILS instead of hanging forever.
+  #
+  # Without this, a build pod that never gets scheduled -- because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Pending indefinitely, and `oc start-build --follow` waits for logs that
+  # never arrive. That is how a CI job burns five hours and is then killed by
+  # GitHub's own limit with nothing useful in the log.
+  #
+  # The deadline covers time spent Pending, not just running -- which is
+  # exactly the case that needs catching.
+  completionDeadlineSeconds: 900     # 15 minutes
+
   resources:
-    # Builds are short-lived but pip-heavy. Too little memory and the build
-    # pod is OOM-killed with a message about the compiler, not about memory.
+    # Sized DOWN deliberately. These are modest pip installs, and the previous
+    # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
+    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # the scheduler refused and every build hung.
+    #
+    # Not a floor to keep lowering: too little and the build is OOM-killed
+    # with a message about the compiler rather than about memory.
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: 100m
+      memory: 256Mi
     limits:
-      memory: 2Gi
+      memory: 1Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
 
@@ -570,14 +706,31 @@ spec:
       github:
         secretReference:
           name: github-webhook-secret
+  # A stuck build FAILS instead of hanging forever.
+  #
+  # Without this, a build pod that never gets scheduled -- because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Pending indefinitely, and `oc start-build --follow` waits for logs that
+  # never arrive. That is how a CI job burns five hours and is then killed by
+  # GitHub's own limit with nothing useful in the log.
+  #
+  # The deadline covers time spent Pending, not just running -- which is
+  # exactly the case that needs catching.
+  completionDeadlineSeconds: 900     # 15 minutes
+
   resources:
-    # Builds are short-lived but pip-heavy. Too little memory and the build
-    # pod is OOM-killed with a message about the compiler, not about memory.
+    # Sized DOWN deliberately. These are modest pip installs, and the previous
+    # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
+    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # the scheduler refused and every build hung.
+    #
+    # Not a floor to keep lowering: too little and the build is OOM-killed
+    # with a message about the compiler rather than about memory.
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: 100m
+      memory: 256Mi
     limits:
-      memory: 2Gi
+      memory: 1Gi
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 5
 

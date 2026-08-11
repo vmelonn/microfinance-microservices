@@ -3,7 +3,7 @@ name: OpenShift CI/CD
 on:
   push:
     branches: [main]
-  workflow_dispatch:        # lets you re-run a deploy without an empty commit
+  workflow_dispatch:        # re-run a deploy without an empty commit
 
 # Two pushes in quick succession would otherwise race: one deploy rolling out
 # while another rebuilds the images underneath it. Queue them instead.
@@ -11,23 +11,15 @@ concurrency:
   group: openshift-deploy
   cancel-in-progress: false
 
-env:
-  # Every service with a Dockerfile. Previously this list held six, and the
-  # three missing ones -- ace-stub and host-simulator especially -- are on the
-  # critical path: without them there is no SOAP gateway and no switch, so
-  # every transaction fails while the pipeline still reports green.
-  SERVICES: >-
-    api-gateway auth-service transaction-service risk-service ledger-service
-    iso8583-adapter ace-stub host-simulator analytics-sync
-
 jobs:
   # ---------------------------------------------------------------------
-  # Cheapest signal first. Ten seconds of unit tests before spending nine
+  # Cheapest signal first: ten seconds of tests before spending nine
   # cluster builds finding out the code is broken.
   # ---------------------------------------------------------------------
   test:
-    name: 1 · Unit tests
+    name: "1. Unit tests"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -60,9 +52,10 @@ jobs:
   # ImageStreams, BuildConfigs, and the platform manifests.
   # ---------------------------------------------------------------------
   infrastructure:
-    name: 2 · Infrastructure
+    name: "2. Infrastructure"
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -77,13 +70,13 @@ jobs:
           namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
           insecure_skip_tls_verify: true
 
-      # Bootstrap the Secret only if it does not already exist.
+      # Create the Secret only if it is absent.
       #
-      # It is NOT part of the kustomize base any more. When it was, every
-      # deploy overwrote the real values with the repo's REPLACE-ME
-      # placeholders -- which silently invalidated every live JWT and, worse,
-      # made any PIN block encrypted under the previous HSM_MASTER_KEY_HEX
-      # permanently undecryptable.
+      # It is no longer part of the kustomize base. When it was, every deploy
+      # overwrote the real values with the repo's REPLACE-ME placeholders --
+      # which silently invalidated every live JWT and, worse, made any PIN
+      # block encrypted under the previous HSM_MASTER_KEY_HEX permanently
+      # undecryptable.
       - name: Ensure secrets exist (never overwrite)
         run: |
           if oc get secret microfinance-secrets >/dev/null 2>&1; then
@@ -97,29 +90,47 @@ jobs:
               --from-literal=CLICKHOUSE_PASSWORD=""
           fi
 
-      # ImageStreams and BuildConfigs. Previously missing entirely, so
-      # `oc start-build` only worked because they had been created by hand --
-      # a fresh namespace would have failed at the build step.
+      # Previously missing entirely, so `oc start-build` only worked because
+      # the BuildConfigs had been created by hand. A fresh namespace failed.
       - name: Apply ImageStreams and BuildConfigs
         run: oc apply -f openshift/build/build.yaml
 
       # NOTE: the `sed -i '/fsGroup:/d'` step that used to live here is gone.
       # The manifests no longer set fsGroup at all -- restricted-v2 allocates
-      # one from the namespace range and rejects hardcoded values, so the
-      # correct fix was to remove it at the source rather than strip it with a
-      # blind text delete across every YAML file.
+      # one from the namespace range and rejects hardcoded values -- so the
+      # fix belonged at the source, not in a blind text delete across every
+      # YAML file in the repo.
       - name: Apply platform manifests
         run: oc apply -k openshift/overlays/dev
 
+      - name: Show quota headroom before building
+        # Builds are the spikiest thing this pipeline does. Seeing the
+        # namespace's remaining capacity here makes a later Pending build
+        # immediately explicable rather than mysterious.
+        run: oc get quota -o wide || echo "(no quota set on this namespace)"
+
   # ---------------------------------------------------------------------
-  # All nine images, in parallel.
+  # Nine images, three at a time.
   # ---------------------------------------------------------------------
   build:
-    name: 3 · Build
+    name: "3. Build"
     needs: infrastructure
     runs-on: ubuntu-latest
+    # A build that cannot be scheduled used to hang until GitHub's 6-hour
+    # ceiling. Generous for a pip install, fast to fail when something is
+    # genuinely wrong.
+    timeout-minutes: 20
     strategy:
       fail-fast: false        # one broken service should not hide the others
+      # THE IMPORTANT ONE. Nine simultaneous build pods, on top of the twelve
+      # already running, exceeded the namespace quota. The build pods were
+      # never scheduled, sat Pending, and `--follow` waited for logs from a
+      # pod that did not exist -- five hours of nothing.
+      #
+      # Three at a time bounds the peak. Wall-clock time goes up; builds that
+      # actually finish are worth more than builds that start in parallel and
+      # hang.
+      max-parallel: 3
       matrix:
         service:
           - api-gateway
@@ -145,19 +156,45 @@ jobs:
           namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
           insecure_skip_tls_verify: true
 
-      # --wait as well as --follow: --follow streams the log, --wait is what
-      # makes a failed build fail this job rather than quietly moving on to
-      # roll out a stale image.
+      # --wait, NOT --follow.
+      #
+      # --follow streams the build pod's logs, so it blocks forever when the
+      # pod is never scheduled: it waits on output from something that does
+      # not exist, printing only "started" while it does. --wait polls the
+      # Build's status instead, so Pending, Failed and Cancelled all resolve
+      # properly -- and completionDeadlineSeconds in build.yaml guarantees it
+      # resolves at all.
+      #
+      # The cost is losing live log streaming. Logs are fetched on failure
+      # below, which is when anyone actually reads them.
       - name: Build ${{ matrix.service }}
-        run: oc start-build ${{ matrix.service }} --follow --wait
+        run: |
+          set -uo pipefail
+          if oc start-build ${{ matrix.service }} --wait; then
+            echo "build succeeded"
+            exit 0
+          fi
+
+          echo "::error::build failed for ${{ matrix.service }}"
+          BUILD=$(oc get builds -l buildconfig=${{ matrix.service }} \
+                    --sort-by=.metadata.creationTimestamp \
+                    -o jsonpath='{.items[-1:].metadata.name}')
+          echo "--- status ---"
+          oc describe build/"$BUILD" | tail -25
+          echo "--- logs ---"
+          oc logs build/"$BUILD" --tail=100 || echo "(no logs -- the pod never started)"
+          echo "--- quota (a Pending build is almost always this) ---"
+          oc get quota -o wide || true
+          exit 1
 
   # ---------------------------------------------------------------------
-  # Roll out, wait, then prove it actually works.
+  # Roll out, wait, then prove it works.
   # ---------------------------------------------------------------------
   deploy:
-    name: 4 · Rollout and smoke test
+    name: "4. Rollout and smoke test"
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -176,10 +213,10 @@ jobs:
           namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
           insecure_skip_tls_verify: true
 
-      # Ordered: the switch and the SOAP gateway first, then the services that
-      # depend on them, then the edge. A gateway that rolls out before the
-      # adapter is ready fails its own readiness probe and slows the rollout
-      # down for no reason.
+      # Ordered by dependency: the switch and the SOAP gateway first, then the
+      # services that need them, then the edge. A gateway rolled out before
+      # the adapter is ready just fails its own readiness probe and drags the
+      # rollout out for no reason.
       - name: Roll out
         run: |
           set -euo pipefail
@@ -189,26 +226,25 @@ jobs:
             echo "::group::$svc"
             oc rollout restart deployment/$svc
 
-            # `oc rollout status` is the right tool -- the previous hand-rolled
-            # polling loop existed to work around rollouts that never
-            # completed, and those were caused by the crash-looping this
-            # commit fixes (no databases, missing /var/hsm), not by the
-            # command being unreliable.
+            # `oc rollout status` is the right tool. The hand-rolled polling
+            # loop it replaces existed to work around rollouts that never
+            # completed, and those were caused by crash-looping pods (no
+            # databases, missing /var/hsm), not by this command.
             if ! oc rollout status deployment/$svc --timeout=5m; then
               echo "::error::rollout failed for $svc"
               oc describe deployment/$svc | tail -30
               oc logs deployment/$svc --tail=80 --all-containers || true
-              # Events explain the failures logs cannot: image pull errors,
-              # SCC rejections, unschedulable pods.
+              # Events explain what logs cannot: image pull failures, SCC
+              # rejections, unschedulable pods.
               oc get events --sort-by=.lastTimestamp | grep -i "$svc" | tail -20 || true
               exit 1
             fi
             echo "::endgroup::"
           done
 
-      # Runs from the runner against the public Route, not via `oc exec` into
-      # a pod. Simpler, and it exercises the same path a real client takes --
-      # through the Route and the router -- rather than requiring the pod to
+      # From the runner against the public Route, not via `oc exec` into a
+      # pod. Simpler, and it exercises the same path a real client takes --
+      # through the Route and the router -- instead of requiring a pod to
       # reach its own external hostname.
       - name: Smoke test
         run: |
