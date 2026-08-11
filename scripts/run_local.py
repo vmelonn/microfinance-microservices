@@ -306,6 +306,21 @@ def verify() -> int:
     except Exception as exc:
         check("WSDL served", False, repr(exc))
 
+    print("\n--- the console is served ---")
+    # The same check the smoke test gained, for the same reason: a deploy went
+    # green while api-gateway ran an image with no console in it. Everything
+    # else passed, because nothing verified that the feature being deployed
+    # had actually shipped.
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:18080/", timeout=10) as r:
+            page = r.read().decode(errors="replace")
+        check("console page served at /", r.status == 200 and "microfinance console" in page)
+    except Exception as exc:  # noqa: BLE001
+        check("console page served at /", False, repr(exc))
+
+    status, _ = call("GET", "/console/traces")
+    check("console API rejects an unauthenticated caller", status == 401, f"got {status}")
+
     print()
     if failures:
         print(f"{len(failures)} check(s) FAILED:")

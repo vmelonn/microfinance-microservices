@@ -176,6 +176,34 @@ def main():
     status, _ = call(GATEWAY_1, "POST", "/transactions/purchase", purchase)
     check("unauthenticated request refused", status == 401, f"got {status}")
 
+    print("\n=== 11. the console is actually served ===")
+    # Added because a pipeline went fully green while api-gateway was running
+    # an image that contained no console at all. Every other check passed: the
+    # API worked, readiness passed, the rollout completed. Nothing verified
+    # that the thing the deploy existed FOR had actually shipped.
+    #
+    # This checks the IMAGE, not the config. ENABLE_CONSOLE can be set
+    # correctly, present in the ConfigMap and visible in the process
+    # environment, and the page still be missing because the running image
+    # predates it. That combination produces a plain 404 rather than an error,
+    # which is why it went unnoticed.
+    try:
+        request = urllib.request.Request(GATEWAY_1 + "/")
+        with urllib.request.urlopen(request, timeout=20, context=_SSL_CONTEXT) as resp:
+            body = resp.read().decode(errors="replace")
+            served = resp.status == 200 and "microfinance console" in body
+    except Exception as exc:  # noqa: BLE001
+        served = False
+        body = repr(exc)
+    check(
+        "console page served at /", served,
+        "a 404 here means the running IMAGE predates the console even when "
+        "ENABLE_CONSOLE=1. Fix: oc start-build api-gateway --wait",
+    )
+
+    status, _ = call(GATEWAY_1, "GET", "/console/traces")
+    check("console API rejects an unauthenticated caller", status == 401, f"got {status}")
+
     print()
     if failures:
         print(f"{len(failures)} check(s) FAILED:")
