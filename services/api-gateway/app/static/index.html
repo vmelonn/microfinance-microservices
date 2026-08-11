@@ -549,16 +549,38 @@ $("btn-peer-new").onclick = async () => {
   await loadPeers();
 };
 
+// 923001234567 -> +92 300 1234567. Mirrors mfcommon.identity.msisdn.display,
+// which is the authority; this is presentation only and never round-trips
+// back into a request.
+function phone(msisdn) {
+  if (!msisdn) return null;
+  return msisdn.startsWith("92") && msisdn.length === 12
+    ? `+92 ${msisdn.slice(2,5)} ${msisdn.slice(5)}`
+    : `+${msisdn}`;
+}
+
 async function loadPeers() {
   const r = await api("GET","/console/ledger/accounts");
   const sel = $("peer-pick");
   sel.length = 1;
   (r.data.accounts || []).forEach(a => {
+    // The funding account is where money enters the platform, not somewhere
+    // you can send it. Offering it as a payee would let someone "pay" the
+    // float back and make the treasury figure meaningless.
+    if (a.type === "system") return;
+
     // Your own account is not a valid recipient: the API rejects a
     // self-transfer, since it would post a debit and a credit to the same
     // account and leave the balance unchanged.
     const mine = a.user_id === S.userId;
-    const label = a.msisdn ? a.msisdn : a.account_id;   // merchants have no number
+
+    // An account with no number predates the switch to phone-number
+    // identity. It is still payable by account ID, but it cannot be reached
+    // the way a customer would actually type it, so say so rather than
+    // showing an opaque acc_ string and leaving you to guess.
+    const named = phone(a.msisdn);
+    const label = named || `${a.account_id}  (no number, pre-MSISDN)`;
+
     sel.add(new Option(
       `${label}  ${(a.balance_cents/100).toFixed(2)}${mine ? "  (you)" : ""}`,
       a.msisdn || a.account_id));
@@ -638,7 +660,11 @@ function renderTable(el, cols, rows) {
 
 $("btn-accounts").onclick = async () => {
   const r = await api("GET","/console/ledger/accounts");
-  const rows = (r.data.accounts||[]).map(a => ({...a, balance: cents(a.balance_cents)}));
+  const rows = (r.data.accounts||[]).map(a => ({
+    ...a,
+    msisdn: phone(a.msisdn) || "(none)",
+    balance: cents(a.balance_cents),
+  }));
   renderTable($("ledger-out"), ["msisdn","balance","cards","type","account_id","created_at"], rows);
 };
 $("btn-txns").onclick = async () => {

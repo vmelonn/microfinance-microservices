@@ -353,15 +353,23 @@ def test_concurrent_spends_cannot_overdraw(repo):
 
     bob = repo.create_account("usr_bob", "4222222222222222")
     merchant = repo.create_account("usr_m2", "merchant:two")
-    repo.topup(bob["account_id"], 10_000, "rrnrace000001")
+    # A prefix the spending threads cannot generate. An earlier version funded
+    # with "rrnrace000001", which thread 1 then reused: it passed the solvency
+    # check, collided on the transactions primary key, and came back
+    # "already_recorded". Correct behaviour, but the assertion below counted
+    # it as a second posting and the test failed on Linux roughly one run in
+    # eight while the ledger was doing exactly the right thing.
+    repo.topup(bob["account_id"], 10_000, "rrnfundrace1")
 
     outcomes, lock = [], threading.Lock()
 
     def spend(n):
         try:
-            repo.record_posting(f"rrnrace{n:06d}", bob["account_id"],
-                                merchant["account_id"], 10_000)
-            result = "recorded"
+            # The RETURNED status, not a hardcoded string. Hardcoding is what
+            # let an idempotent replay masquerade as a successful posting, and
+            # it meant the assertion was not measuring what it claimed to.
+            result = repo.record_posting(f"rrnrace{n:06d}", bob["account_id"],
+                                         merchant["account_id"], 10_000)["status"]
         except InsufficientFunds:
             result = "refused"
         except Exception as exc:  # noqa: BLE001
@@ -376,6 +384,12 @@ def test_concurrent_spends_cannot_overdraw(repo):
         thread.join()
 
     assert outcomes.count("recorded") == 1, outcomes
+    assert not [o for o in outcomes if o.startswith("error")], outcomes
+
+    # The invariant, checked against the database rather than against what the
+    # threads reported. A wrong outcome label cannot fool this.
+    purchases = [r for r in repo.export_since(None) if r["kind"] == "purchase"]
+    assert len(purchases) == 1, purchases
     assert repo.balance(bob["account_id"]) == 0
     assert repo.is_balanced()
 
