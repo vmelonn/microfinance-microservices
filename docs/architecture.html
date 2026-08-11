@@ -435,7 +435,7 @@
         </div>
         <div class="svc">
           <h4>ledger-service</h4><span class="port">:8084 · own Postgres</span>
-          <p>Double-entry postings, idempotent on RRN. Knows nothing about purchases, risk, or solvency, it records balanced journal entries.</p>
+          <p>Double-entry postings, idempotent on RRN. Knows nothing about purchases or risk. It does own <strong>solvency</strong>: a debit that would take a customer account below zero is refused inside the transaction that would have written it.</p>
           <span class="reps">2 replicas</span>
         </div>
         <div class="svc crypto">
@@ -824,7 +824,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
             <tr><td>authorize, timeout</td><td class="mono">0</td><td>Reversal issued; outcome <code>unknown</code>; no ledger posting.</td></tr>
             <tr><td>ledger, duplicate RRN</td><td>, </td><td>Not an error. <code>already_recorded</code>, return the original result.</td></tr>
             <tr><td>ledger, 5xx after an approval</td><td class="mono">3</td><td>Compensating <code>0400</code>. If that also fails: <code>requires_reconciliation</code> and a human.</td></tr>
-            <tr><td>registration, account creation fails</td><td class="mono">0</td><td>Delete the user. Otherwise a failed signup leaves someone who can log in, owns nothing, and whose CNIC blocks a retry.</td></tr>
+            <tr><td>registration, account creation fails</td><td class="mono">0</td><td>Delete the user. Otherwise a failed signup leaves someone who can log in, owns nothing, and whose phone number blocks a retry.</td></tr>
           </tbody>
         </table>
       </div>
@@ -975,20 +975,50 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         <header><span class="pill post">POST</span><span class="path">/users/register</span><span class="auth">public</span></header>
         <div class="body">
           <p>A two-service saga: auth-service creates the user, ledger-service creates the account and card. If the second fails, the first is compensated by deletion.</p>
-          <pre><code>{ <span class="s">"full_name"</span>: <span class="s">"Ayesha Khan"</span>, <span class="s">"cnic"</span>: <span class="s">"3520212345678"</span>,
+          <pre><code>{ <span class="s">"full_name"</span>: <span class="s">"Ayesha Khan"</span>, <span class="s">"msisdn"</span>: <span class="s">"0300 123 4567"</span>,
   <span class="s">"bind_card_number"</span>: <span class="s">"4532015112830366"</span>, <span class="s">"password"</span>: <span class="s">"min-8-chars"</span> }
 
 <span class="c">→ 200</span> { <span class="s">"user_id"</span>: <span class="s">"usr_a1b2c3d4e5f6"</span>, <span class="s">"account_id"</span>: <span class="s">"acc_9876543210ab"</span> }
-<span class="c">→ 409</span> CNIC or card already registered</code></pre>
+<span class="c">→ 409</span> phone number or card already registered</code></pre>
+          <p>The <strong>MSISDN is the identity</strong>. Every way a customer
+          might type it, <code>0300 123 4567</code>, <code>+92 300 1234567</code>,
+          <code>923001234567</code>, normalises to one stored value before it
+          touches a database. That normaliser lives in <code>mfcommon</code>
+          rather than in each service: auth-service stores the number and
+          ledger-service resolves payees against it, and if those two disagreed
+          by one character, registration would succeed while every later
+          transfer to that number failed as "recipient not registered".</p>
         </div>
       </div>
 
       <div class="ep">
         <header><span class="pill post">POST</span><span class="path">/auth/login</span><span class="auth">public</span></header>
         <div class="body">
-          <pre><code>{ <span class="s">"cnic"</span>: <span class="s">"3520212345678"</span>, <span class="s">"password"</span>: <span class="s">"..."</span> }
+          <pre><code>{ <span class="s">"msisdn"</span>: <span class="s">"0300 123 4567"</span>, <span class="s">"password"</span>: <span class="s">"..."</span> }
 <span class="c">→ 200</span> { <span class="s">"access_token"</span>: <span class="s">"eyJ..."</span>, <span class="s">"expires_in_seconds"</span>: <span class="k">3600</span> }
 <span class="c">→ 401</span> identical error for unknown user and wrong password</code></pre>
+        </div>
+      </div>
+
+      <div class="ep">
+        <header><span class="pill post">POST</span><span class="path">/transactions/topup</span><span class="auth">Bearer + ownership</span></header>
+        <div class="body">
+          <p>Where money enters the platform. Every wallet opens at zero and
+          cannot be overdrawn, so without this nothing can be spent.</p>
+          <pre><code>{ <span class="s">"amount"</span>: <span class="k">100.00</span>, <span class="s">"card_number"</span>: <span class="s">"4532015112830366"</span>,
+  <span class="s">"idempotency_key"</span>: <span class="s">"client-uuid"</span> }
+
+<span class="c">→ 200</span> { <span class="s">"status"</span>: <span class="s">"approved"</span>, <span class="s">"rrn"</span>: <span class="s">"178645152886"</span>,
+      <span class="s">"ledger_status"</span>: <span class="s">"recorded"</span> }</code></pre>
+          <p>No PIN, and that is deliberate rather than an omission: a PIN
+          authorises money <em>leaving</em> an account. What does need checking
+          is that the card belongs to the caller, which transaction-service
+          enforces, so nobody can inflate a stranger's balance.</p>
+          <p>It does not touch the switch. It models an agent cash-in, where
+          the customer hands over money and the wallet is credited. A
+          card-funded top-up would be a real ISO 8583 transaction with
+          processing code <code>21</code> and would run the same saga as a
+          purchase.</p>
         </div>
       </div>
 

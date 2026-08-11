@@ -110,7 +110,25 @@ def main():
     check("registered and authenticated", bool(token), "")
     print(f"        card={card[:6]}...{card[-4:]}  account={account_id}")
 
-    print("\n=== 3. purchase: REST -> SOAP -> ISO 8583 -> SOAP -> REST ===")
+    print("\n=== 3. an empty wallet cannot spend ===")
+    # Accounts open at zero and overdrafts are refused, so this is the state
+    # every real customer is in immediately after registering.
+    status, broke = call(GATEWAY_1, "POST", "/transactions/purchase", {
+        "amount": 25.50, "card_number": card, "pin": "1234",
+        "idempotency_key": f"broke-{uuid.uuid4().hex[:12]}",
+    }, token=token)
+    check("purchase on a zero balance declined",
+          status == 200 and broke.get("status") == "declined", f"{status} {json.dumps(broke)}")
+
+    print("\n=== 4. top up ===")
+    status, topped = call(GATEWAY_1, "POST", "/transactions/topup", {
+        "amount": 100.00, "card_number": card,
+        "idempotency_key": f"tu-{uuid.uuid4().hex[:12]}",
+    }, token=token)
+    check("top-up approved", status == 200 and topped.get("status") == "approved",
+          f"{status} {json.dumps(topped)}")
+
+    print("\n=== 5. purchase: REST -> SOAP -> ISO 8583 -> SOAP -> REST ===")
     key = f"smoke-{uuid.uuid4().hex[:12]}"
     purchase = {"amount": 25.50, "card_number": card, "pin": "1234", "idempotency_key": key}
 
@@ -121,12 +139,12 @@ def main():
     check("posted to the ledger", result.get("ledger_status") == "recorded", json.dumps(result))
     print(f"        rrn={result.get('rrn')}  stan={result.get('stan')}  auth={result.get('authorization_id')}")
 
-    print("\n=== 4. the debit actually landed ===")
+    print("\n=== 6. the debit actually landed ===")
     status, balance = call(GATEWAY_1, "GET", f"/accounts/{card}/balance", token=token)
-    check("balance reflects the debit", status == 200 and balance.get("balance_cents") == -2550,
+    check("balance reflects the debit", status == 200 and balance.get("balance_cents") == 7450,
           json.dumps(balance))
 
-    print("\n=== 5. idempotency: same key, DIFFERENT replica ===")
+    print("\n=== 7. idempotency: same key, DIFFERENT replica ===")
     # Replica 2 has never seen this request. Only shared Redis state can make
     # it return the identical result rather than charging a second time.
     status, replay = call(GATEWAY_2, "POST", "/transactions/purchase", purchase, token=token)
@@ -134,16 +152,34 @@ def main():
           f"{status} {json.dumps(replay)}")
 
     status, balance_after = call(GATEWAY_1, "GET", f"/accounts/{card}/balance", token=token)
-    check("balance UNCHANGED after the replay", balance_after.get("balance_cents") == -2550,
+    check("balance UNCHANGED after the replay", balance_after.get("balance_cents") == 7450,
           f"charged twice: {json.dumps(balance_after)}")
 
-    print("\n=== 6. same key, different body, must be rejected ===")
+    print("\n=== 8. spending more than you hold ===")
+    status, over = call(GATEWAY_1, "POST", "/transactions/purchase", {
+        "amount": 500.00, "card_number": card, "pin": "1234",
+        "idempotency_key": f"over-{uuid.uuid4().hex[:12]}",
+    }, token=token)
+    check("overspend declined", status == 200 and over.get("status") == "declined",
+          f"{status} {json.dumps(over)}")
+    status, intact = call(GATEWAY_1, "GET", f"/accounts/{card}/balance", token=token)
+    check("balance untouched by the declined attempt", intact.get("balance_cents") == 7450,
+          json.dumps(intact))
+
+    print("\n=== 9. same key, different body, must be rejected ===")
     tampered = dict(purchase, amount=999.00)
     status, _ = call(GATEWAY_1, "POST", "/transactions/purchase", tampered, token=token)
     check("idempotency key reuse rejected", status == 400, f"got {status}")
 
-    print("\n=== 7. risk velocity escalates ACROSS replicas ===")
+    print("\n=== 10. risk velocity escalates ACROSS replicas ===")
     velocity_token, velocity_card, _ = register(GATEWAY_1)
+    # Funded first. Otherwise all seven attempts decline for insufficient
+    # funds, the velocity rule is never reached, and the check passes for
+    # entirely the wrong reason.
+    call(GATEWAY_1, "POST", "/transactions/topup", {
+        "amount": 100.00, "card_number": velocity_card,
+        "idempotency_key": f"tu-{uuid.uuid4().hex[:12]}",
+    }, token=velocity_token)
     outcomes = []
     for i in range(7):
         target = GATEWAY_1 if i % 2 == 0 else GATEWAY_2   # alternate every attempt
@@ -156,8 +192,13 @@ def main():
     check("velocity escalated despite alternating replicas",
           any(o in ("review", "decline") for o in outcomes),
           "shared velocity state is NOT working")
+    # "decline" is risk's word, "declined" is the solvency pre-check's. If the
+    # latter appears the top-up above did not land and this section proved
+    # nothing about velocity.
+    check("the escalation came from risk, not from an empty wallet",
+          "declined" not in outcomes, str(outcomes))
 
-    print("\n=== 8. authorization: you cannot spend from someone else's card ===")
+    print("\n=== 11. authorization: you cannot spend from someone else's card ===")
     other_token, _other_card, _ = register(GATEWAY_1)
     status, _ = call(GATEWAY_1, "POST", "/transactions/purchase", {
         "amount": 10.00, "card_number": card, "pin": "1234",   # the FIRST user's card
@@ -165,18 +206,18 @@ def main():
     }, token=other_token)
     check("cross-account spend refused", status == 403, f"got {status}")
 
-    print("\n=== 9. an unregistered card is refused ===")
+    print("\n=== 12. an unregistered card is refused ===")
     status, _ = call(GATEWAY_1, "POST", "/transactions/purchase", {
         "amount": 10.00, "card_number": "4000000000009999", "pin": "1234",
         "idempotency_key": f"unknown-{uuid.uuid4().hex[:12]}",
     }, token=token)
     check("unknown card refused", status == 404, f"got {status}")
 
-    print("\n=== 10. no token, no transaction ===")
+    print("\n=== 13. no token, no transaction ===")
     status, _ = call(GATEWAY_1, "POST", "/transactions/purchase", purchase)
     check("unauthenticated request refused", status == 401, f"got {status}")
 
-    print("\n=== 11. the console is actually served ===")
+    print("\n=== 14. the console is actually served ===")
     # Added because a pipeline went fully green while api-gateway was running
     # an image that contained no console at all. Every other check passed: the
     # API worked, readiness passed, the rollout completed. Nothing verified

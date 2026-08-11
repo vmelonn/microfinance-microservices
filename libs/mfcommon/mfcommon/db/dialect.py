@@ -85,7 +85,11 @@ class Database:
 
             return psycopg2.connect(self.dsn)
 
-        conn = sqlite3.connect(self.dsn, timeout=15)
+        # isolation_level=None turns OFF the driver's implicit transaction
+        # handling so `transaction()` can issue BEGIN IMMEDIATE itself. See
+        # the long comment there; this line is half of that fix and is
+        # useless without it.
+        conn = sqlite3.connect(self.dsn, timeout=15, isolation_level=None)
         # Foreign keys are OFF by default in SQLite, which would let a
         # ledger entry reference an account that does not exist, the exact
         # class of corruption the schema's REFERENCES clauses exist to
@@ -163,6 +167,29 @@ class Database:
         `with conn:` is precisely the kind of difference worth removing.
         """
         conn = self.connect()
+        if not self.is_postgres:
+            # BEGIN IMMEDIATE, not a plain BEGIN, and this is load-bearing
+            # rather than a tuning choice.
+            #
+            # Python's sqlite3 driver does not start a transaction on a
+            # SELECT. It waits for the first INSERT, UPDATE or DELETE. So a
+            # read-then-write inside `with transaction()` runs the read in
+            # autocommit, outside the transaction entirely, and ten threads
+            # checking a balance before spending it all read the same
+            # sufficient balance and all succeed.
+            #
+            # That is not hypothetical: the ledger's concurrency test caught
+            # exactly this, four of ten threads overdrew an account that
+            # could fund one. BEGIN IMMEDIATE takes the write lock up front,
+            # so every read inside the block is already serialised against
+            # other writers, which is the behaviour Postgres gives via
+            # SELECT ... FOR UPDATE.
+            #
+            # The cost is that writers queue instead of proceeding in
+            # parallel. For a ledger that is the point. Readers are
+            # unaffected: WAL keeps them going, and `cursor()` never enters
+            # this path.
+            conn.execute("BEGIN IMMEDIATE")
         try:
             yield conn
             conn.commit()
@@ -181,8 +208,7 @@ class Database:
         finally:
             conn.close()
 
-    #, dialect-specific fragments ----------------------------------------
-
+    # -- dialect-specific fragments ----------------------------------------
     @property
     def autoincrement_pk(self) -> str:
         return "BIGSERIAL PRIMARY KEY" if self.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"

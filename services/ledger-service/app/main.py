@@ -31,7 +31,7 @@ from mfcommon.observability.correlation import (
     set_correlation_id,
 )
 
-from app.repository import LedgerRepository
+from app.repository import InsufficientFunds, LedgerRepository
 
 LEDGER_DSN = os.environ.get("LEDGER_DSN", "ledger.db")
 ALLOW_RESET = os.environ.get("ALLOW_LEDGER_RESET", "0") == "1"
@@ -68,6 +68,8 @@ async def lifespan(app: FastAPI):
     db.wait_until_available()
     repo = LedgerRepository(db)
     repo.init_schema()
+    # Money has to come from somewhere. See LedgerRepository.FUNDING_ACCOUNT.
+    repo.ensure_system_accounts()
     app.state.repo = repo
     log.info(f"ledger-service ready on {db.dialect}")
     yield
@@ -155,6 +157,17 @@ def create_posting(body: PostingRequest, request: Request):
             amount_cents=body.amount_cents,
             kind=body.kind,
         )
+    except InsufficientFunds as exc:
+        # 409, not 422: the request is well formed and both accounts exist,
+        # the debit side simply cannot cover it. A distinct status so callers
+        # can separate "your fault" from "my fault" without parsing a string.
+        log.warning(f"insufficient funds rrn={body.rrn}: {exc}")
+        raise HTTPException(status_code=409, detail={
+            "error": "insufficient_funds",
+            "account_id": exc.account_id,
+            "balance_cents": exc.balance_cents,
+            "amount_cents": exc.amount_cents,
+        })
     except Exception as exc:
         # A foreign-key violation reaches here rather than being mislabelled
         # as "already recorded", see repository.record_posting.
@@ -168,6 +181,30 @@ def create_posting(body: PostingRequest, request: Request):
                {"rrn": body.rrn, "amount_cents": body.amount_cents,
                 "debit": body.debit_account, "credit": body.credit_account})
     log.info(f"posting rrn={body.rrn} status={result['status']} amount_cents={body.amount_cents}")
+    return result
+
+
+class TopupRequest(BaseModel):
+    rrn: str = Field(..., min_length=6, max_length=12)
+    account_id: str
+    amount_cents: int = Field(..., gt=0)
+
+
+@app.post("/internal/ledger/topup")
+def topup(body: TopupRequest, request: Request):
+    """
+    Credit a wallet from the funding account. Idempotent on RRN like every
+    other posting, so a retried top-up cannot credit twice.
+    """
+    repo: LedgerRepository = request.app.state.repo
+    try:
+        result = repo.topup(body.account_id, body.amount_cents, body.rrn)
+    except Exception as exc:
+        log.error(f"topup failed rrn={body.rrn}: {exc!r}")
+        raise HTTPException(status_code=422, detail=f"Top-up rejected: {exc}")
+
+    log.info(f"topup rrn={body.rrn} account={body.account_id} "
+             f"amount_cents={body.amount_cents} status={result['status']}")
     return result
 
 
@@ -227,9 +264,13 @@ def reset(request: Request):
     """
     if not ALLOW_LEDGER_RESET_ENABLED():
         raise HTTPException(status_code=403, detail="Ledger reset is disabled in this environment.")
-    request.app.state.repo.reset()
-    log.warning("ledger wiped via /internal/ledger/reset")
-    return {"status": "reset"}
+    removed = request.app.state.repo.reset()
+    # The funding account is recreated implicitly on the next top-up only if
+    # it still exists; reset leaves accounts alone, so it does. Called again
+    # for the case where someone truncated accounts by hand.
+    request.app.state.repo.ensure_system_accounts()
+    log.warning(f"ledger wiped via /internal/ledger/reset: {removed}")
+    return {"status": "reset", **removed}
 
 
 def ALLOW_LEDGER_RESET_ENABLED() -> bool:

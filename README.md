@@ -55,17 +55,49 @@ starting risk-service           :8083   ready
 starting transaction-service    :8082   ready
 starting api-gateway            :18080  ready
 
+  PASS  purchase on a zero balance is declined
+  PASS  declined before the switch was called, so there is nothing to reverse
+  PASS  top-up approved
+  PASS  balance is 10000 cents
   PASS  purchase approved
   PASS  posted to the ledger          rrn=178638403660  stan=000017  auth=A18008
-  PASS  balance is -2550 cents
+  PASS  balance is 7450 cents (10000 topped up, 2550 spent)
   PASS  replay returned the cached result
   PASS  balance unchanged after the replay
+  PASS  overspend declined
+  PASS  balance untouched by the declined attempt
   PASS  mismatched body rejected
   PASS  cannot spend from someone else's card
-        approved → approved → approved → review → review → decline → decline
+        approved -> approved -> approved -> review -> review -> decline -> decline
   PASS  velocity escalated to review or decline
+  PASS  transfer to a differently formatted number approved
   PASS  total debits == total credits
 ```
+
+### Where the money comes from
+
+Every wallet opens at **zero** and cannot be overdrawn. A debit that would
+take a customer account below zero is refused inside the same database
+transaction that would have written it, so two concurrent spends cannot both
+succeed against one balance.
+
+Money therefore has to enter somewhere, and in double-entry bookkeeping
+crediting a customer means debiting something else. That something is
+`acc_system_funding`:
+
+```
+POST /transactions/topup     debit  acc_system_funding
+                             credit the customer
+```
+
+Its balance is **negative by design**, and its magnitude is exactly the float
+customers are holding. That is the number a treasury team reconciles against
+the real bank account backing the wallet, not a bug to fix.
+
+A top-up does not go near the switch. It models an agent cash-in: the customer
+hands over money and the wallet is credited. A card-funded top-up would be a
+real ISO 8583 transaction with processing code `21`, and would go through the
+same saga as a purchase.
 
 For the full thing, Postgres, Redis, ClickHouse, and **two** gateway
 replicas:

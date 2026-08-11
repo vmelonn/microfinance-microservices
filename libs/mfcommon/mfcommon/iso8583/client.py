@@ -43,8 +43,7 @@ class ISO8583Client:
         self._send_lock = threading.Lock()
         self._stan_counter = 0
 
-    #, connection lifecycle --------------------------------------------------
-
+    # -- connection lifecycle --------------------------------------------------
     def connect(self):
         """Starts the connection loop in the background. Returns immediately."""
         self._stop.clear()
@@ -87,8 +86,7 @@ class ISO8583Client:
                 break
             time.sleep(self.reconnect_delay)  # backoff before trying again
 
-    #, sending ------------------------------------------------------------------
-
+    # -- sending ------------------------------------------------------------------
     def next_stan(self) -> str:
         self._stan_counter = (self._stan_counter + 1) % 1000000
         return f"{self._stan_counter:06d}"
@@ -109,8 +107,7 @@ class ISO8583Client:
     def sign_off(self):
         self.send_message("0800", {11: self.next_stan(), 70: "002"})
 
-    #, receiving ------------------------------------------------------------------
-
+    # -- receiving ------------------------------------------------------------------
     def _receive_loop(self):
         while not self._stop.is_set():
             # Wait (with a timeout) for data to actually be available before
@@ -129,8 +126,7 @@ class ISO8583Client:
             if self.on_message:
                 self.on_message(parsed)
 
-    #, heartbeat ------------------------------------------------------------------
-
+    # -- heartbeat ------------------------------------------------------------------
     def _heartbeat_loop(self):
         """Sends a periodic echo test so idle connections don't get silently dropped."""
         while self._connected.is_set() and not self._stop.is_set():

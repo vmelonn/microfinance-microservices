@@ -65,6 +65,7 @@
   button.go:hover{filter:brightness(1.1)}
   button.go:disabled{opacity:.45;cursor:not-allowed}
   button.ghost{background:none;color:var(--accent);border:1px solid var(--rule)}
+  button.danger{color:var(--crit);border-color:var(--crit)}
   .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end}
   .row>*{flex:1;min-width:110px}
   .row button.go{flex:0 0 auto}
@@ -162,8 +163,34 @@
       </div>
     </div>
 
+
     <div class="card">
-      <h2>2. Pay</h2>
+      <h2>2. Top up</h2>
+      <div class="note">
+        Every wallet starts at <strong>zero</strong>, and a purchase that would
+        take it below zero is refused. So money has to get in first.
+        <br><br>
+        A top-up is an ordinary double-entry posting, not a special case: the
+        <code>acc_system_funding</code> account is debited and yours is
+        credited. That account therefore runs <strong>negative</strong>, and its
+        magnitude is exactly the float customers are holding. It does not go
+        near the switch, because there is no card being charged, only cash
+        handed to an agent.
+      </div>
+      <div class="row">
+        <div><label for="tu-amt">Amount</label><input id="tu-amt" type="number" step="0.01" value="100.00"></div>
+        <div><label for="tu-idem">Idempotency key</label>
+          <div class="row">
+            <input id="tu-idem">
+            <button class="go ghost" id="btn-tu-newkey">New</button>
+          </div>
+        </div>
+      </div>
+      <button class="go" id="btn-topup">Top up</button>
+    </div>
+
+    <div class="card">
+      <h2>3. Pay</h2>
       <label for="card">Card number</label>
       <input id="card" placeholder="register first">
       <div class="row">
@@ -189,19 +216,22 @@
         <br><br>
         Pay twice with the <strong>same</strong> key to see the cached reply and
         an unchanged balance. That is the guarantee, not a caching detail.
+        <br><br>
+        Spending more than you hold is declined <em>before</em> the switch is
+        called, so there is no approved authorisation left to reverse.
       </div>
       <button class="go" id="btn-pay">Pay</button>
     </div>
 
     <div class="card">
-      <h2>3. Result</h2>
+      <h2>4. Result</h2>
       <div id="result"><p class="muted">No transaction yet.</p></div>
       <button class="go ghost" id="btn-balance" style="margin-top:.6rem">Check balance</button>
       <div id="balance"></div>
     </div>
 
     <div class="card">
-      <h2>4. Send to another user</h2>
+      <h2>5. Send to another user</h2>
       <div class="note">
         Send to a phone number, the way a mobile wallet works. A different
         path from a purchase: processing code <code>400000</code> instead of
@@ -277,6 +307,13 @@
         <button class="go ghost" id="btn-accounts">Accounts</button>
         <button class="go ghost" id="btn-txns">Transactions</button>
         <button class="go ghost" id="btn-integrity">Check it balances</button>
+        <button class="go ghost danger" id="btn-reset">Reset ledger</button>
+      </div>
+      <div class="note">
+        Reset deletes every posting and returns all balances, including the
+        funding account, to zero. Accounts and logins survive. It is refused
+        unless <code>ALLOW_LEDGER_RESET=1</code>, which is set in dev and not
+        in prod.
       </div>
       <div id="ledger-out" class="scroll" style="margin-top:.7rem"></div>
     </div>
@@ -465,6 +502,29 @@ window.jumpToTrace = cid => {
   loadTrace(cid);
 };
 
+/* -------------------------------- top-up ---------------------------------- */
+const newTuKey = () => $("tu-idem").value = "tu-" + Math.random().toString(36).slice(2,12);
+$("btn-tu-newkey").onclick = newTuKey;
+newTuKey();
+
+$("btn-topup").onclick = async () => {
+  if (!S.token) return showResult({status:0, data:{detail:"Register or log in first."}});
+  $("btn-topup").disabled = true;
+  const t0 = performance.now();
+  const r = await api("POST","/transactions/topup",{
+    amount: parseFloat($("tu-amt").value),
+    card_number: $("card").value.trim(),
+    idempotency_key: $("tu-idem").value,
+  });
+  showResult(r, Math.round(performance.now()-t0));
+  $("btn-topup").disabled = false;
+  // A new key for the next one. Reusing it would replay the cached response
+  // and look like the top-up silently did nothing, which is the guarantee
+  // working, not a failure, but it reads as a bug from the outside.
+  newTuKey();
+  $("btn-balance").click();
+};
+
 /* ------------------------------ transfers -------------------------------- */
 const newTKey = () => $("t-idem").value = "tx-" + Math.random().toString(36).slice(2,12);
 $("btn-t-newkey").onclick = newTKey;
@@ -586,6 +646,16 @@ $("btn-txns").onclick = async () => {
   const rows = (r.data.transactions||[]).map(t => ({...t, amount: cents(t.amount_cents)}));
   renderTable($("ledger-out"), ["rrn","amount","kind","debit_account_id","credit_account_id","created_at"], rows);
 };
+$("btn-reset").onclick = async () => {
+  if (!confirm("Delete every transaction and ledger entry? Accounts and logins stay."))
+    return;
+  const r = await api("POST","/console/ledger/reset");
+  $("ledger-out").innerHTML = r.status === 200
+    ? `<p class="muted">Ledger reset. Removed ${r.data.transactions_deleted} transactions `
+      + `and ${r.data.entries_deleted} entries. Every balance is now zero.</p>`
+    : `<p class="muted">${esc(JSON.stringify(r.data))}</p>`;
+};
+
 $("btn-integrity").onclick = async () => {
   const r = await api("GET","/console/ledger/integrity");
   const ok = r.data.balanced;

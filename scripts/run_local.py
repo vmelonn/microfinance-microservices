@@ -230,6 +230,29 @@ def verify() -> int:
     check("login issued a token", status == 200 and "access_token" in tok, f"{status} {tok}")
     token = tok.get("access_token")
 
+    print("\n--- an empty wallet cannot spend ---")
+    # Runs BEFORE the top-up, which is the only order that proves anything.
+    # Every account now opens at zero, so this is the state a real customer
+    # is in the moment they finish registering.
+    status, broke = call("POST", "/transactions/purchase", {
+        "amount": 25.50, "card_number": card, "pin": "1234",
+        "idempotency_key": f"broke-{uuid.uuid4().hex[:10]}",
+    }, token=token)
+    check("purchase on a zero balance is declined",
+          status == 200 and broke.get("status") == "declined", f"{status} {broke}")
+    check("declined before the switch was called, so there is nothing to reverse",
+          broke.get("rrn") is None, str(broke))
+
+    print("\n--- top up ---")
+    status, topped = call("POST", "/transactions/topup", {
+        "amount": 100.00, "card_number": card,
+        "idempotency_key": f"tu-{uuid.uuid4().hex[:10]}",
+    }, token=token)
+    check("top-up approved", status == 200 and topped.get("status") == "approved",
+          f"{status} {topped}")
+    status, funded = call("GET", f"/accounts/{card}/balance", token=token)
+    check("balance is 10000 cents", funded.get("balance_cents") == 10000, str(funded))
+
     print("\n--- purchase: REST -> SOAP -> ISO 8583 -> SOAP -> REST ---")
     key = f"local-{uuid.uuid4().hex[:10]}"
     purchase = {"amount": 25.50, "card_number": card, "pin": "1234", "idempotency_key": key}
@@ -246,14 +269,26 @@ def verify() -> int:
 
     print("\n--- the debit actually landed ---")
     status, balance = call("GET", f"/accounts/{card}/balance", token=token)
-    check("balance is -2550 cents", status == 200 and balance.get("balance_cents") == -2550, str(balance))
+    check("balance is 7450 cents (10000 topped up, 2550 spent)",
+          status == 200 and balance.get("balance_cents") == 7450, str(balance))
 
     print("\n--- idempotent replay, same process ---")
     status, replay = call("POST", "/transactions/purchase", purchase, token=token)
     check("replay returned the cached result", status == 200 and replay.get("rrn") == result.get("rrn"),
           f"{status} {replay}")
     status, after = call("GET", f"/accounts/{card}/balance", token=token)
-    check("balance unchanged after the replay", after.get("balance_cents") == -2550, str(after))
+    check("balance unchanged after the replay", after.get("balance_cents") == 7450, str(after))
+
+    print("\n--- spending more than you hold ---")
+    status, over = call("POST", "/transactions/purchase", {
+        "amount": 500.00, "card_number": card, "pin": "1234",
+        "idempotency_key": f"over-{uuid.uuid4().hex[:10]}",
+    }, token=token)
+    check("overspend declined", status == 200 and over.get("status") == "declined",
+          f"{status} {over}")
+    status, intact = call("GET", f"/accounts/{card}/balance", token=token)
+    check("balance untouched by the declined attempt",
+          intact.get("balance_cents") == 7450, str(intact))
 
     print("\n--- key reuse with a different body is rejected ---")
     status, _ = call("POST", "/transactions/purchase", dict(purchase, amount=999.0), token=token)
@@ -283,6 +318,13 @@ def verify() -> int:
         "bind_card_number": vel_card, "password": "velocity-password-1",
     })
     _, vt = call("POST", "/auth/login", {"msisdn": vel_msisdn, "password": "velocity-password-1"})
+    # Funded first, or all seven attempts decline for insufficient funds, the
+    # velocity rule is never reached, and the check below passes for entirely
+    # the wrong reason. The assertion excludes "declined" for that reason.
+    call("POST", "/transactions/topup", {
+        "amount": 100.0, "card_number": vel_card,
+        "idempotency_key": f"tu-{uuid.uuid4().hex[:10]}",
+    }, token=vt.get("access_token"))
     outcomes = []
     for _ in range(7):
         _, body = call("POST", "/transactions/purchase", {
@@ -291,8 +333,12 @@ def verify() -> int:
         }, token=vt.get("access_token"))
         outcomes.append(body.get("status"))
     print(f"        {' -> '.join(str(o) for o in outcomes)}")
+    # "decline" is the risk engine's word; "declined" is the solvency
+    # pre-check's. Only the former proves what this is testing.
     check("velocity escalated to review or decline",
           any(o in ("review", "decline") for o in outcomes), str(outcomes))
+    check("the escalation came from risk, not from an empty wallet",
+          "declined" not in outcomes, str(outcomes))
 
     print("\n--- transfer to a PHONE NUMBER ---")
     # The MSISDN is the account. This proves a payee resolves by the number a
@@ -311,6 +357,7 @@ def verify() -> int:
     # Deliberately sent to a DIFFERENT spelling of the same number than the
     # one registered. Both must normalise to one stored value.
     spaced = f"{peer_msisdn[:4]} {peer_msisdn[4:7]} {peer_msisdn[7:]}"
+    # The sender pays out of the top-up above, not out of thin air.
     status, transfer = call("POST", "/transactions/transfer", {
         "amount": 7.50, "sender_card_number": card, "sender_pin": "1234",
         "recipient_account": spaced,

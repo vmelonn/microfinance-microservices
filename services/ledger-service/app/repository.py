@@ -25,12 +25,30 @@ class AccountNotFound(Exception):
     pass
 
 
+class InsufficientFunds(Exception):
+    """
+    The debit would take an account below zero.
+
+    Its own type rather than a generic error, because the caller has to treat
+    it differently from a foreign-key violation or a duplicate RRN: this one
+    is the customer's problem and is safe to show them, the others are bugs.
+    """
+
+    def __init__(self, account_id: str, balance_cents: int, amount_cents: int):
+        self.account_id = account_id
+        self.balance_cents = balance_cents
+        self.amount_cents = amount_cents
+        super().__init__(
+            f"Account {account_id} has {balance_cents} cents; "
+            f"{amount_cents} would overdraw it."
+        )
+
+
 class LedgerRepository:
     def __init__(self, db: Database):
         self.db = db
 
-    #, schema -------------------------------------------------------------
-
+    # -- schema -------------------------------------------------------------
     def init_schema(self) -> None:
         ts = self.db.timestamp_type
         pk = self.db.autoincrement_pk
@@ -123,7 +141,37 @@ class LedgerRepository:
         if "msisdn" not in columns:
             cur.execute("ALTER TABLE accounts ADD COLUMN msisdn TEXT")
 
-    #, identity -----------------------------------------------------------
+    # -- system accounts ------------------------------------------------------
+
+    # Money cannot appear from nowhere in a double-entry ledger: crediting a
+    # customer requires debiting something. This is that something.
+    #
+    # It represents value entering the platform from outside, an agent taking
+    # cash, a bank transfer, a card load. Its balance is therefore NEGATIVE by
+    # design, and its magnitude is the total float customers are holding. That
+    # is not a bug to fix; it is the number a treasury team would reconcile
+    # against the real bank account backing the wallet.
+    FUNDING_ACCOUNT = "acc_system_funding"
+
+    def ensure_system_accounts(self) -> None:
+        """Idempotent, called at startup."""
+        with self.db.transaction() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                self.db.sql("SELECT account_id FROM accounts WHERE account_id = ?"),
+                (self.FUNDING_ACCOUNT,),
+            )
+            if cur.fetchone():
+                return
+            cur.execute(
+                self.db.sql(
+                    "INSERT INTO accounts (account_id, user_id, msisdn, type, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)"
+                ),
+                (self.FUNDING_ACCOUNT, "system", None, "system", utc_now_param()),
+            )
+
+    # -- identity -------------------------------------------------------------
 
     def create_account(self, user_id: str, card_number: str, account_type: str = "checking",
                        msisdn: str | None = None) -> dict:
@@ -189,8 +237,7 @@ class LedgerRepository:
             row = cur.fetchone()
             return row[0] if row else None
 
-    #, money --------------------------------------------------------------
-
+    # -- money --------------------------------------------------------------
     def record_posting(
         self, rrn: str, debit_account: str, credit_account: str, amount_cents: int, kind: str = "purchase"
     ) -> dict:
@@ -213,6 +260,20 @@ class LedgerRepository:
         try:
             with self.db.transaction() as conn:
                 cur = conn.cursor()
+
+                # Solvency is checked INSIDE the same transaction as the
+                # insert, not before it. A check-then-write across two
+                # statements is a race: two concurrent purchases can each read
+                # a sufficient balance and both post, overdrawing the account.
+                #
+                # On Postgres the account row is locked FOR UPDATE, so the
+                # second transaction blocks until the first commits and then
+                # reads the balance the first one produced. On SQLite the
+                # equivalent comes from Database.transaction() opening with
+                # BEGIN IMMEDIATE; without that the read below runs in
+                # autocommit and the race is wide open.
+                self._assert_solvent(cur, debit_account, amount_cents)
+
                 cur.execute(
                     self.db.sql(
                         "INSERT INTO transactions (rrn, amount_cents, kind, created_at) VALUES (?, ?, ?, ?)"
@@ -239,6 +300,61 @@ class LedgerRepository:
             raise
 
         return {"status": "recorded", "rrn": rrn, "amount_cents": amount_cents}
+
+    def _assert_solvent(self, cur, account_id: str, amount_cents: int) -> None:
+        """
+        Raises InsufficientFunds unless the account can cover the debit.
+
+        System accounts are exempt: the funding account is where money enters
+        the platform, so it is negative by definition and blocking it would
+        make top-ups impossible.
+        """
+        if self.db.is_postgres:
+            cur.execute(
+                "SELECT type FROM accounts WHERE account_id = %s FOR UPDATE",
+                (account_id,),
+            )
+        else:
+            cur.execute(
+                "SELECT type FROM accounts WHERE account_id = ?", (account_id,)
+            )
+        row = cur.fetchone()
+        if row is None:
+            # Not our error to raise: the foreign key on ledger_entries will
+            # reject this in a moment, and record_posting distinguishes that
+            # from a duplicate RRN. Pre-empting it here would mislabel it.
+            return
+        if row[0] == "system":
+            return
+
+        cur.execute(
+            self.db.sql("""
+                SELECT COALESCE(SUM(CASE WHEN entry_type='credit' THEN amount_cents
+                                         ELSE -amount_cents END), 0)
+                FROM ledger_entries WHERE account_id = ?
+            """),
+            (account_id,),
+        )
+        current = int(cur.fetchone()[0] or 0)
+        if current - amount_cents < 0:
+            raise InsufficientFunds(account_id, current, amount_cents)
+
+    def topup(self, account_id: str, amount_cents: int, rrn: str) -> dict:
+        """
+        Move money INTO a customer wallet from the funding account.
+
+        A normal double-entry posting, not a special case: the funding account
+        is debited and the customer credited, so the ledger still balances and
+        the RRN still makes it idempotent. The only thing that makes it a
+        top-up is which account is on which side.
+        """
+        return self.record_posting(
+            rrn=rrn,
+            debit_account=self.FUNDING_ACCOUNT,
+            credit_account=account_id,
+            amount_cents=amount_cents,
+            kind="topup",
+        )
 
     def balance(self, account_id: str) -> int:
         """Credits minus debits, in cents."""
@@ -374,9 +490,24 @@ class LedgerRepository:
                 for r in cur.fetchall()
             ]
 
-    def reset(self) -> None:
-        """Sandbox only. Wired to an endpoint that production config disables."""
+    def reset(self) -> dict:
+        """
+        Sandbox only. Wired to an endpoint that production config disables.
+
+        Deletes the POSTINGS, not the accounts. Balances are derived by
+        summing ledger_entries, so removing every entry returns every account
+        to zero, including the funding account, while leaving customers able
+        to log in with the cards and numbers they already have.
+
+        Returns what it removed, so the caller can show something more
+        convincing than "ok" after an irreversible operation.
+        """
         with self.db.transaction() as conn:
             cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM ledger_entries")
+            entries = int(cur.fetchone()[0])
+            cur.execute("SELECT COUNT(*) FROM transactions")
+            transactions = int(cur.fetchone()[0])
             cur.execute("DELETE FROM ledger_entries")
             cur.execute("DELETE FROM transactions")
+        return {"entries_deleted": entries, "transactions_deleted": transactions}

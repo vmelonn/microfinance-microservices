@@ -120,6 +120,12 @@ class PurchaseRequest(BaseModel):
     entry_mode: str = "05"
 
 
+class TopupRequest(BaseModel):
+    user_id: str
+    card_number: str = Field(..., min_length=12, max_length=19)
+    amount_cents: int = Field(..., gt=0)
+
+
 class TransferRequest(BaseModel):
     user_id: str
     sender_card_number: str = Field(..., min_length=12, max_length=19)
@@ -129,7 +135,7 @@ class TransferRequest(BaseModel):
 
 
 class TransactionResponse(BaseModel):
-    status: str                       # approved | declined | review | unknown | error
+    status: str   # approved | declined | review | reversed | unknown | error
     reason: str | None = None
     rrn: str | None = None
     stan: str | None = None
@@ -162,7 +168,7 @@ def _generate_rrn() -> str:
 def purchase(body: PurchaseRequest, request: Request):
     state = request.app.state
 
-    #, Step 1: resolve both sides, and prove the caller owns the debit side.
+    # -- Step 1: resolve both sides, and prove the caller owns the debit side.
     # Read-only. Failing here costs nothing and touches no money.
     sender = _resolve_or_404(state, body.card_number, "Sender card is not registered.")
     merchant = _resolve_or_404(state, MERCHANT_IDENTIFIER, f"Merchant '{MERCHANT_IDENTIFIER}' is not registered.")
@@ -173,7 +179,34 @@ def purchase(body: PurchaseRequest, request: Request):
         # any card whose number the holder happened to know.
         raise HTTPException(status_code=403, detail="You are not authorized to use this card.")
 
-    #, Step 2: risk. Never retried: evaluating records an attempt, so a
+    # -- Step 2: can they actually afford it?
+    #
+    # A pre-check, NOT the guarantee. ledger-service enforces solvency
+    # atomically when it posts, and that is what makes an overdraft
+    # impossible. This exists so an unaffordable purchase never reaches the
+    # switch: without it the switch approves, the ledger refuses, and the
+    # saga reverses an authorisation that should never have been requested.
+    # That path works, but it burns a switch round trip and leaves a reversal
+    # in the host's logs for what is really just an empty wallet.
+    #
+    # BEFORE risk, deliberately. Risk evaluation is stateful, it records an
+    # attempt, which is why the call below is never retried. Feeding it a
+    # transaction that was never going to proceed means a customer with an
+    # empty wallet tapping "pay" three times inflates their own velocity and
+    # sends their next funded transaction to review.
+    #
+    # Racy by nature: the balance can change between here and the posting.
+    # That is fine. This is the friendly path; the ledger is the correct one.
+    if not _can_afford(state, sender["account_id"], body.amount_cents):
+        log.warning(f"insufficient funds for {mask_pan(body.card_number)}, declining early")
+        trace.emit("saga", "declined: insufficient funds, the switch was never called",
+                   {"amount_cents": body.amount_cents}, level="warn")
+        return TransactionResponse(
+            status="declined",
+            reason="Insufficient funds. Top up your wallet and try again.",
+        )
+
+    # -- Step 3: risk. Never retried: evaluating records an attempt, so a
     # retry inflates the caller's own velocity toward a decline.
     try:
         decision = state.risk.post(
@@ -201,7 +234,7 @@ def purchase(body: PurchaseRequest, request: Request):
         log.warning(f"risk {decision['outcome']} card={mask_pan(body.card_number)}: {reason}")
         return TransactionResponse(status=decision["outcome"], reason=reason)
 
-    #, Step 3: authorize at the switch. THE POINT OF NO RETURN.
+    # -- Step 4: authorize at the switch. THE POINT OF NO RETURN.
     rrn = _generate_rrn()
     trace.emit("saga", "RRN generated, entering the point of no return", {"rrn": rrn})
     auth = _authorize(
@@ -235,7 +268,7 @@ def purchase(body: PurchaseRequest, request: Request):
             stan=auth.get("stan"),
         )
 
-    #, Step 4: record it. Idempotent on RRN, so retries are safe.
+    # -- Step 5: record it. Idempotent on RRN, so retries are safe.
     confirmed_rrn = auth.get("rrn") or rrn
     ledger_status = _post_to_ledger(
         state,
@@ -249,15 +282,7 @@ def purchase(body: PurchaseRequest, request: Request):
         stan=auth.get("stan"),
     )
 
-    return TransactionResponse(
-        status="approved",
-        reason=auth.get("response_text"),
-        rrn=confirmed_rrn,
-        stan=auth.get("stan"),
-        authorization_id=auth.get("authorization_id"),
-        ledger_status=ledger_status["status"],
-        requires_reconciliation=ledger_status["requires_reconciliation"],
-    )
+    return _respond(auth, confirmed_rrn, ledger_status)
 
 
 @app.post("/internal/transactions/transfer", response_model=TransactionResponse)
@@ -276,6 +301,15 @@ def transfer(body: TransferRequest, request: Request):
         # account: the ledger still balances, the balance is unchanged, and
         # the row is pure noise. Reject it rather than record it.
         raise HTTPException(status_code=400, detail="Sender and recipient are the same account.")
+
+    # Same pre-check as a purchase, in the same position and for the same
+    # reasons. See the long comment there.
+    if not _can_afford(state, sender["account_id"], body.amount_cents):
+        log.warning("insufficient funds for transfer, declining early")
+        return TransactionResponse(
+            status="declined",
+            reason="Insufficient funds. Top up your wallet and try again.",
+        )
 
     try:
         decision = state.risk.post(
@@ -326,20 +360,55 @@ def transfer(body: TransferRequest, request: Request):
         stan=auth.get("stan"),
     )
 
-    return TransactionResponse(
-        status="approved",
-        reason=auth.get("response_text"),
-        rrn=confirmed_rrn,
-        stan=auth.get("stan"),
-        authorization_id=auth.get("authorization_id"),
-        ledger_status=ledger_status["status"],
-        requires_reconciliation=ledger_status["requires_reconciliation"],
-    )
+    return _respond(auth, confirmed_rrn, ledger_status)
 
 
 # --------------------------------------------------------------------------
 # Saga steps
 # --------------------------------------------------------------------------
+
+def _can_afford(state, account_id: str, amount_cents: int) -> bool:
+    """Best-effort balance check. Fails OPEN: if the ledger cannot be reached
+    the atomic check at posting time still protects us, and refusing every
+    transaction because a read failed would be worse."""
+    try:
+        result = state.ledger.get(f"/internal/ledger/accounts/{account_id}/balance", retries=1)
+        return int(result.get("balance_cents", 0)) >= amount_cents
+    except Exception:  # noqa: BLE001
+        return True
+
+
+@app.post("/internal/transactions/topup", response_model=TransactionResponse)
+def topup(body: TopupRequest, request: Request):
+    """
+    Put money into a wallet.
+
+    Deliberately does NOT go through the switch. A card-funded top-up in a
+    real platform would (processing code 21, a deposit), but this models an
+    agent cash-in: the customer hands over cash and the agent credits the
+    wallet. There is no card transaction to authorise, only a ledger movement.
+    """
+    state = request.app.state
+    sender = _resolve_or_404(state, body.card_number, "Card is not registered.")
+    if sender.get("user_id") != body.user_id:
+        raise HTTPException(status_code=403, detail="You are not authorized to use this card.")
+
+    rrn = _generate_rrn()
+    try:
+        result = state.ledger.post("/internal/ledger/topup", {
+            "rrn": rrn,
+            "account_id": sender["account_id"],
+            "amount_cents": body.amount_cents,
+        }, retries=3)   # idempotent on RRN, so retrying cannot double-credit
+    except ServiceRejectedError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))
+    except ServiceCallError as exc:
+        raise HTTPException(status_code=503, detail=f"Ledger unavailable: {exc}")
+
+    log.info(f"topup rrn={rrn} amount_cents={body.amount_cents}")
+    return TransactionResponse(status="approved", reason="Wallet topped up",
+                               rrn=rrn, ledger_status=result["status"])
+
 
 def _resolve_or_404(state, identifier: str, message: str) -> dict:
     try:
@@ -382,6 +451,61 @@ def _authorize(state, **kwargs) -> dict:
             "response_text": f"ISO 8583 adapter unreachable: {exc}",
             "rrn": kwargs["rrn"],
         }
+
+
+def _respond(auth: dict, rrn: str, ledger_status: dict) -> TransactionResponse:
+    """
+    Turn the saga's internal outcome into what the customer is told.
+
+    The distinction that matters: the switch approving is NOT the transaction
+    succeeding. If the ledger then refused and the authorisation was reversed,
+    no money moved, and saying "approved" because the switch said so would be
+    reporting an internal step as the result.
+
+    Three outcomes, deliberately not two:
+
+        approved                the money moved
+        reversed                it did not, and we successfully undid the hold
+        reconciliation_required we do not know, and a human has to look
+
+    That last one is the honest answer to a genuinely unknown state, and it
+    is why this returns a status rather than a boolean.
+    """
+    posting = ledger_status["status"]
+
+    if posting == "reversed":
+        return TransactionResponse(
+            status="reversed",
+            reason="The payment could not be recorded and the authorization was reversed. "
+                   "No money left your account.",
+            rrn=rrn,
+            stan=auth.get("stan"),
+            authorization_id=auth.get("authorization_id"),
+            ledger_status=posting,
+            requires_reconciliation=False,
+        )
+
+    if posting == "reconciliation_required":
+        return TransactionResponse(
+            status="unknown",
+            reason="The payment is in an uncertain state and is being reconciled. "
+                   "Do not retry; you will be contacted.",
+            rrn=rrn,
+            stan=auth.get("stan"),
+            authorization_id=auth.get("authorization_id"),
+            ledger_status=posting,
+            requires_reconciliation=True,
+        )
+
+    return TransactionResponse(
+        status="approved",
+        reason=auth.get("response_text"),
+        rrn=rrn,
+        stan=auth.get("stan"),
+        authorization_id=auth.get("authorization_id"),
+        ledger_status=posting,
+        requires_reconciliation=False,
+    )
 
 
 def _post_to_ledger(state, *, rrn, debit, credit, amount_cents, kind, card_number, stan) -> dict:

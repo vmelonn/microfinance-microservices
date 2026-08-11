@@ -124,8 +124,8 @@ data:
 # StatefulSet with a PVC, because this holds money and losing it is not
 # recoverable from anywhere else in the platform.
 #
-# ONE server, TWO logical databases. Database-per-service is about ownership
-#, who may migrate a schema, who breaks when a column changes, not about
+# ONE server, TWO logical databases. Database-per-service is about ownership:
+# who may migrate a schema, who breaks when a column changes, not about
 # process count. Splitting into two StatefulSets is a config change here and
 # a DSN change in two Deployments, and is the right move the moment either
 # service's load or backup schedule diverges from the other's.

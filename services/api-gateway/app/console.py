@@ -22,6 +22,7 @@ it into something worse.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 
@@ -29,6 +30,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from mfcommon.observability import trace
+
+log = logging.getLogger("api-gateway.console")
 
 router = APIRouter()
 
@@ -122,6 +125,30 @@ def transactions(request: Request, limit: int = 50):
 def integrity(request: Request):
     """Total debits versus total credits. If this is ever false, stop."""
     return _ledger(request, "/internal/ledger/integrity")
+
+
+@router.post("/console/ledger/reset")
+def reset_ledger(request: Request):
+    """
+    Wipe every posting and return all balances to zero.
+
+    Proxied rather than exposed directly: ledger-service is not reachable
+    from outside the cluster, and its own ALLOW_LEDGER_RESET gate is what
+    actually decides whether this works. The gateway adds authentication (the
+    whole console router sits behind current_user) but deliberately adds no
+    second gate, so there is exactly one place to look when it is refused.
+    """
+    from mfcommon.http.client import ServiceCallError, ServiceRejectedError
+
+    try:
+        result = request.app.state.ledger.post("/internal/ledger/reset", {}, retries=0)
+    except ServiceRejectedError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))
+    except ServiceCallError as exc:
+        raise HTTPException(status_code=503, detail=f"Ledger unavailable: {exc}")
+
+    log.warning("ledger reset requested from the console")
+    return result
 
 
 def _ledger(request: Request, path: str):

@@ -192,6 +192,16 @@ class PurchaseRequest(BaseModel):
     entry_mode: str = "05"
 
 
+class TopupRequest(BaseModel):
+    # Capped. Not a risk control, an accident control: the amount is typed by
+    # hand into a demo console, and a stray keypress that credits a wallet
+    # with 100 million distorts every dashboard afterwards. Real cash-in
+    # limits are a regulatory matter (CDD tiers) and belong in risk-service.
+    amount: float = Field(..., gt=0, le=500_000)
+    card_number: str = Field(..., min_length=12, max_length=19)
+    idempotency_key: str = Field(..., min_length=8)
+
+
 class TransferRequest(BaseModel):
     amount: float = Field(..., gt=0)
     sender_card_number: str = Field(..., min_length=12, max_length=19)
@@ -345,6 +355,47 @@ def purchase(body: PurchaseRequest, request: Request, user: dict = Depends(curre
         # error would make every retry of this key return the same error
         # forever, even though the transaction may have succeeded, or may
         # succeed on a genuine retry.
+        raise HTTPException(status_code=503, detail=f"Transaction service unavailable: {exc}")
+
+    state.idempotency.store_response(body.idempotency_key, result)
+    return result
+
+
+@app.post("/transactions/topup")
+def topup(body: TopupRequest, request: Request, user: dict = Depends(current_user)):
+    """
+    Put money into a wallet.
+
+    No PIN, deliberately, and worth being explicit about why rather than
+    leaving it looking like an omission. A PIN authorises money LEAVING an
+    account; there is nothing to authorise about money arriving. What does
+    need checking is that the card belongs to the caller, which
+    transaction-service enforces, so nobody can inflate a stranger's balance.
+
+    In production the authorisation that matters here is on the funding side:
+    the agent's till, the card being charged, the bank debit. This platform
+    has none of those, so a top-up is a ledger movement from the funding
+    account and nothing more.
+    """
+    state = request.app.state
+
+    cached = _claim(state, body.idempotency_key, body)
+    if cached is not None:
+        return cached
+
+    try:
+        result = state.transactions.post(
+            "/internal/transactions/topup",
+            {
+                "user_id": user["user_id"],
+                "card_number": body.card_number,
+                "amount_cents": _to_cents(body.amount),
+            },
+            retries=0,
+        )
+    except ServiceRejectedError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))
+    except ServiceCallError as exc:
         raise HTTPException(status_code=503, detail=f"Transaction service unavailable: {exc}")
 
     state.idempotency.store_response(body.idempotency_key, result)

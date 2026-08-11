@@ -129,8 +129,7 @@ class Iso8583SoapClient:
                 )
             raise
 
-    #, operations, matching the three in the WSDL ------------------------
-
+    # -- operations, matching the three in the WSDL ------------------------
     def authorize(
         self,
         *,
