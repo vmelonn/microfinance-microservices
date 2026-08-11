@@ -426,15 +426,26 @@ jobs:
               want=$(oc get deploy "$svc" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 1)
               ready=$(oc get deploy "$svc" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)
               updated=$(oc get deploy "$svc" -o jsonpath='{.status.updatedReplicas}' 2>/dev/null || echo 0)
+              # ALL pods, old ones included. This is the term that was
+              # missing, and without it the gate passed on the OLD pod:
+              # readyReplicas counts every ready pod, so during a rolling
+              # update updated==want and ready==want can both hold while the
+              # ready pod is the one being replaced. total==want is only true
+              # once the old pods are actually gone.
+              total=$(oc get deploy "$svc" -o jsonpath='{.status.replicas}' 2>/dev/null || echo 0)
 
-              if [ "$obs" = "$gen" ] && [ "${ready:-0}" = "$want" ] && [ "${updated:-0}" = "$want" ]; then
-                echo "  ready: $svc ($ready/$want)"
+              if [ "$obs" = "$gen" ] \
+                 && [ "${ready:-0}" = "$want" ] \
+                 && [ "${updated:-0}" = "$want" ] \
+                 && [ "${total:-0}" = "$want" ]; then
+                echo "  ready: $svc ($ready/$want, no old pods left)"
               else
+                echo "  waiting: $svc obs=$obs/$gen ready=${ready:-0} updated=${updated:-0} total=${total:-0} want=$want"
                 STILL="$STILL $svc"
               fi
             done
             PENDING="$STILL"
-            [ -n "${PENDING// /}" ] && sleep 5
+            [ -n "${PENDING// /}" ] && { echo "---"; sleep 8; }
           done
 
           if [ -n "${PENDING// /}" ]; then

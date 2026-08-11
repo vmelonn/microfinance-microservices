@@ -71,6 +71,29 @@ def check(label, condition, detail=""):
         failures.append(label)
 
 
+def missing_endpoints(base, required):
+    """
+    Which of `required` the running service does not serve, according to its
+    own OpenAPI schema.
+
+    Falls back to an empty list if the schema is not reachable: this is a
+    guard, and a guard that cannot run must not invent a failure. A genuinely
+    missing endpoint still fails its own check further down, just less
+    legibly.
+    """
+    status, schema = call(base, "GET", "/openapi.json")
+    if status != 200 or not isinstance(schema.get("paths"), dict):
+        print("        (no OpenAPI schema exposed, skipping the image check)")
+        return []
+
+    paths = schema["paths"]
+    return [
+        f"{method} {path}"
+        for method, path in required
+        if method.lower() not in {m.lower() for m in paths.get(path, {})}
+    ]
+
+
 def register(base):
     msisdn = "03" + str(uuid.uuid4().int)[:9]
     card = "4" + str(uuid.uuid4().int)[:15]
@@ -155,6 +178,32 @@ def main():
 
     status, ready = call(GATEWAY_1, "GET", "/ready")
     check("api-gateway ready", status == 200, json.dumps(ready))
+
+    # The IMAGE, not the config. A deploy can be fully green while a pod runs
+    # a build that predates the endpoints under test: the rollout completes,
+    # readiness passes, /health answers, and the first missing route then
+    # cascades into a page of failures that all look like application bugs.
+    # Asking the running process what it actually serves is the only check
+    # that names the real cause.
+    missing = missing_endpoints(GATEWAY_1, [
+        ("POST", "/users/register"),
+        ("POST", "/auth/login"),
+        ("POST", "/transactions/purchase"),
+        ("POST", "/transactions/topup"),
+        ("POST", "/transactions/transfer"),
+    ])
+    check(
+        "the running image serves every endpoint under test", not missing,
+        f"MISSING: {', '.join(missing)}. The pod is running an image that "
+        f"predates them. Fix: oc start-build api-gateway --wait, then "
+        f"oc rollout restart deployment/api-gateway",
+    )
+    if missing:
+        # Stopping here on purpose. Continuing produces a page of failures
+        # that are all this one failure wearing different hats.
+        print("\n  aborting: the deployed image is stale, later checks would "
+              "only report symptoms of it.")
+        return 1
 
     print("\n=== 1. register a merchant, so purchases have somewhere to credit ===")
     merchant_msisdn = "03" + str(uuid.uuid4().int)[:9]
