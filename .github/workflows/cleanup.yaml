@@ -31,16 +31,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: redhat-actions/openshift-tools-installer@v1
-        with:
-          oc: "4"
+      # oc installed with curl rather than redhat-actions/openshift-tools-installer.
+      # That action targets a deprecated Node runtime, races on the tool cache
+      # when jobs run concurrently, and matches eleven candidate tarballs
+      # before picking one -- three of the four warnings on every run came
+      # from it. This is four lines and has none of those failure modes.
+      - name: Install oc
+        run: |
+          curl -sSL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz \
+            | sudo tar -xz -C /usr/local/bin oc
+          oc version --client
 
-      - uses: redhat-actions/oc-login@v1
-        with:
-          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER }}
-          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
-          namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}
-          insecure_skip_tls_verify: true
+      # `oc login` directly, rather than redhat-actions/oc-login, for the same
+      # deprecated-runtime reason. The token is passed via the environment so
+      # it never appears in a process listing; GitHub masks it in logs either
+      # way.
+      - name: Log in to OpenShift
+        env:
+          TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
+          SERVER: ${{ secrets.OPENSHIFT_SERVER }}
+          NAMESPACE: ${{ secrets.OPENSHIFT_NAMESPACE }}
+        run: |
+          oc login --token="$TOKEN" --server="$SERVER" --insecure-skip-tls-verify=true
+          oc project "$NAMESPACE"
 
       - name: Before
         run: |
