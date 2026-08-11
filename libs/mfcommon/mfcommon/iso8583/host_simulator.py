@@ -1,4 +1,4 @@
-﻿"""
+"""
 A fake switch, for testing the client without touching real financial
 infrastructure. Accepts connections, reads MLI-framed ISO 8583 messages,
 and sends back scripted responses based on MTI:
@@ -7,13 +7,13 @@ and sends back scripted responses based on MTI:
   0200 (financial request) -> 0210 approved (DE 39 = 00)
   0400 (reversal request)  -> 0410 acknowledged
 
-Anything else gets no response at all -- which is exactly how you'd
+Anything else gets no response at all, which is exactly how you'd
 simulate a silent/timed-out host later, once Layer 3's timeout logic
 needs something to time out against.
 """
 
 # Bumped whenever this file changes in a way worth being able to verify at
-# a glance -- print(HOST_SIMULATOR_BUILD) or check it in a debugger if
+# a glance, print(HOST_SIMULATOR_BUILD) or check it in a debugger if
 # you're ever unsure whether stale bytecode is masking a fix.
 HOST_SIMULATOR_BUILD = "2026-08-05-idle-timeout-fix"
 
@@ -40,15 +40,15 @@ class HostSimulator:
         self._server_sock = None
         self._stop = threading.Event()
         self._accept_thread = None
-        self.received = []          # every parsed message the simulator has seen -- useful for tests
+        self.received = []          # every parsed message the simulator has seen, useful for tests
         self._received_lock = threading.Lock()
 
     def start(self):
-        print(f"[HostSimulator] starting -- build: {HOST_SIMULATOR_BUILD}")
+        print(f"[HostSimulator] starting, build: {HOST_SIMULATOR_BUILD}")
         self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         # A just-closed listener on this port can briefly linger in TIME_WAIT
-        # even with SO_REUSEADDR -- retry a few times rather than fail outright.
+        # even with SO_REUSEADDR, retry a few times rather than fail outright.
         for attempt in range(15):
             try:
                 self._server_sock.bind((self.host, self.port))
@@ -78,11 +78,11 @@ class HostSimulator:
             try:
                 conn, _addr = self._server_sock.accept()
             except socket.timeout:
-                continue  # just here to re-check self._stop -- not a real error
+                continue  # just here to re-check self._stop, not a real error
             except OSError:
                 return
             # The accepted connection inherits the listening socket's 0.5s
-            # timeout by default -- which would make it drop out from under
+            # timeout by default, which would make it drop out from under
             # any client that goes more than 0.5s between messages (i.e.
             # every real connection, since heartbeats are tens of seconds
             # apart). Reset it to blocking; only the LISTENING socket needs
@@ -101,7 +101,7 @@ class HostSimulator:
                 with self._received_lock:
                     self.received.append(parsed)
                 # Each message is handled on its own thread, so an
-                # artificially slow one doesn't block the others behind it --
+                # artificially slow one doesn't block the others behind it,
                 # this is what lets responses genuinely arrive out of order.
                 threading.Thread(
                     target=self._respond, args=(conn, parsed, write_lock), daemon=True
@@ -153,7 +153,7 @@ class HostSimulator:
 if __name__ == "__main__":
     sim = HostSimulator()
     sim.start()
-    print(f"Host simulator listening on {sim.host}:{sim.port} -- Ctrl+C to stop")
+    print(f"Host simulator listening on {sim.host}:{sim.port}, Ctrl+C to stop")
     try:
         while True:
             pass

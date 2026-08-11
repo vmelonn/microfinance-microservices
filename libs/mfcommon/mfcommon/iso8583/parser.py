@@ -1,7 +1,7 @@
 """
 Binary ISO 8583 parser / builder.
 
-Everything stays in raw bytes -- no ASCII digit encoding. Numeric fields are
+Everything stays in raw bytes, no ASCII digit encoding. Numeric fields are
 packed as BCD (2 decimal digits per byte). The bitmap is raw binary (8 bytes,
 extended to 16 bytes via the secondary bitmap when any DE 65-128 is present).
 Includes a reader for raw files/streams framed with a 2-byte length header
@@ -10,13 +10,13 @@ ISO 8583 over a TCP socket.
 
 Vendor note: BCD padding for odd-length numeric strings, and whether the
 length prefix on LLVAR/LLLVAR fields is itself BCD or ASCII, both vary by
-processor. This implementation documents its choices inline -- check your
+processor. This implementation documents its choices inline, check your
 target switch's spec and adjust if it differs.
 
 PLATFORM NOTE: this module is the executable specification that the IBM ACE
 DFDL schema (ace/Iso8583Library/dfdl/ISO8583.xsd) must agree with, byte for
 byte. Two independent implementations of a binary wire format WILL drift
-unless something forces them together -- tests/e2e/test_dfdl_conformance.py
+unless something forces them together, tests/e2e/test_dfdl_conformance.py
 is that forcing function. If you change padding, length-prefix encoding, or
 the binary-field list here, the DFDL schema is now wrong and the
 conformance test is what will tell you.
@@ -56,7 +56,7 @@ class FieldSpec:
     length: int          # digit/char count (fixed length, or max for LLVAR/LLLVAR)
     numeric: bool = True  # True = BCD packed, False = raw ASCII bytes
     binary: bool = False   # True = genuinely binary content (PIN blocks, MACs, EMV
-                            # data) -- must NEVER have trailing bytes stripped on
+                            # data), must NEVER have trailing bytes stripped on
                             # decode, unlike space-padded text fields, where a
                             # coincidental trailing byte (e.g. random ciphertext
                             # ending in 0x20, or any latin-1 whitespace codepoint)
@@ -68,7 +68,7 @@ class FieldSpec:
 # Full DE 2-128 catalog (ISO 8583:1987 base standard).
 # DE 1 is reserved as the secondary-bitmap indicator, not a real data field.
 # n = numeric (BCD packed), ans/an/b = alphanumeric or binary (raw bytes, not BCD).
-# Fields 56-63 and 105-127 have no fixed standard meaning -- every processor
+# Fields 56-63 and 105-127 have no fixed standard meaning, every processor
 # repurposes them, so their length here is a generic placeholder only.
 FIELD_SPECS = {
     2:   FieldSpec("LLVAR", 19),                    # PAN
@@ -351,7 +351,7 @@ def parse_message(raw: bytes, offset: int = 0):
                 # rstrip() correctly trims space-padding off a real text
                 # field (e.g. DE 43's merchant name), but binary content
                 # (a PIN block, a MAC) can coincidentally end in a byte
-                # that decodes to a whitespace codepoint -- stripping it
+                # that decodes to a whitespace codepoint, stripping it
                 # there would silently corrupt genuine data, not padding.
                 value = raw_value if spec.binary else raw_value.rstrip()
                 pos += spec.length
@@ -486,7 +486,7 @@ def iter_messages_from_file(path: str, length_prefixed: bool = True, prefix_byte
     Yields parsed ISO 8583 messages from a raw binary file.
 
     length_prefixed=True assumes each message is preceded by an MLI
-    (Message Length Indicator) -- a big-endian integer giving the byte
+    (Message Length Indicator), a big-endian integer giving the byte
     length of the message that follows. This is the standard TCP framing
     most switches use, so a captured raw socket stream will look like:
         [2-byte length][message bytes][2-byte length][message bytes]...

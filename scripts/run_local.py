@@ -1,5 +1,5 @@
-﻿"""
-Run the whole platform as ordinary processes -- no Docker required.
+"""
+Run the whole platform as ordinary processes, no Docker required.
 
     python scripts/run_local.py            # start, wait for ready, then idle
     python scripts/run_local.py --verify   # start, run the checks, tear down
@@ -44,7 +44,7 @@ STATE = ROOT / ".local-run"
 
 # Order matters: each service's readiness probe depends on the ones before it.
 # ace-stub refuses to start at all without a reachable switch, which is
-# deliberate -- a gateway that starts "successfully" with no switch connection
+# deliberate, a gateway that starts "successfully" with no switch connection
 # passes its probe and then fails every transaction.
 SERVICES = [
     {
@@ -108,7 +108,7 @@ SERVICES = [
         # 18080, not 8080: 8080 is very commonly already taken on a dev
         # machine, and the failure is an opaque WinError 10013 rather than
         # anything mentioning a port conflict. Compose and OpenShift both
-        # still use 8080 -- only this local runner differs.
+        # still use 8080, only this local runner differs.
         "port": 18080,
         "module": "app.main:app",
         "env": {
@@ -131,7 +131,7 @@ def start(service: dict) -> subprocess.Popen:
     env.update(SHARED_ENV)
     env.update(service["env"])
     # Each service owns a top-level `app` package, so they cannot share one
-    # sys.path -- two services' app.main would shadow each other. A separate
+    # sys.path, two services' app.main would shadow each other. A separate
     # process per service with its own PYTHONPATH is the whole reason this
     # runs as subprocesses rather than in one interpreter.
     env["PYTHONPATH"] = str(ROOT / "services" / service["name"])
@@ -170,7 +170,7 @@ def wait_ready(service: dict, timeout: float = 45.0) -> bool:
                 if response.status == 200:
                     return True
         except urllib.error.HTTPError:
-            time.sleep(0.4)      # 503 from a readiness probe -- keep waiting
+            time.sleep(0.4)      # 503 from a readiness probe, keep waiting
         except Exception:
             time.sleep(0.4)
     return False

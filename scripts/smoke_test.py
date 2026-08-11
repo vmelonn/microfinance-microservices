@@ -23,7 +23,7 @@ import uuid
 # Defaults target docker-compose, which publishes the two gateway replicas on
 # separate host ports. Against OpenShift there is ONE Route in front of both
 # replicas, so --base is passed and the two "replicas" below become the same
-# address -- which weakens the cross-replica checks rather than breaking
+# address, which weakens the cross-replica checks rather than breaking
 # them: the Route load-balances, so repeated calls still land on different
 # pods, just not deterministically. Compose remains the place that proves it
 # conclusively.
@@ -31,7 +31,7 @@ GATEWAY_1 = "http://localhost:8080"
 GATEWAY_2 = "http://localhost:8081"   # the second replica
 
 # Set by --insecure. An OpenShift Route frequently terminates TLS with a cert
-# signed by the cluster's own CA, which no CI runner trusts by default -- and
+# signed by the cluster's own CA, which no CI runner trusts by default, and
 # the failure is CERTIFICATE_VERIFY_FAILED, which says nothing about it being
 # a trust problem rather than the service being down. Opt-in only, so nobody
 # turns verification off without meaning to.
@@ -103,7 +103,7 @@ def main():
         "full_name": "Demo Merchant", "cnic": merchant_cnic,
         "bind_card_number": "merchant:demo", "password": "merchant-password-1",
     })
-    check("merchant registered", status in (200, 409), "409 is fine -- already exists")
+    check("merchant registered", status in (200, 409), "409 is fine, already exists")
 
     print("\n=== 2. register a cardholder and log in ===")
     token, card, account_id = register(GATEWAY_1)
@@ -208,7 +208,7 @@ if __name__ == "__main__":
     if args.base:
         base = args.base.rstrip("/")
         GATEWAY_1 = GATEWAY_2 = base
-        print(f"targeting {base} (single endpoint -- the Route load-balances across replicas)")
+        print(f"targeting {base} (single endpoint, the Route load-balances across replicas)")
 
     if args.insecure:
         import ssl

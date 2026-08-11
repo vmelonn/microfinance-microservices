@@ -4,7 +4,7 @@ each run on Postgres in a cluster and SQLite on a laptop.
 
 WHY NOT AN ORM: the SQL in this platform is a dozen statements, most of them
 inserts and one aggregate. SQLAlchemy would be more code to configure than
-to replace, and it would hide the exact statement being issued -- which
+to replace, and it would hide the exact statement being issued, which
 matters here, because ledger-service's correctness rests on a specific
 PRIMARY KEY conflict being raised and caught, not on an abstraction over it.
 
@@ -48,7 +48,7 @@ def utc_now_param() -> str:
 
     Always offset-aware. A naive timestamp written to a TIMESTAMPTZ column is
     interpreted in the server's timezone, which is how the monolith's
-    warehouse sync ended up re-processing the same rows forever -- the
+    warehouse sync ended up re-processing the same rows forever, the
     offset was silently dropped and comparisons stopped matching.
     """
     return datetime.now(timezone.utc).isoformat()
@@ -87,7 +87,7 @@ class Database:
 
         conn = sqlite3.connect(self.dsn, timeout=15)
         # Foreign keys are OFF by default in SQLite, which would let a
-        # ledger entry reference an account that does not exist -- the exact
+        # ledger entry reference an account that does not exist, the exact
         # class of corruption the schema's REFERENCES clauses exist to
         # prevent. Postgres enforces them unconditionally.
         conn.execute("PRAGMA foreign_keys = ON")
@@ -105,20 +105,20 @@ class Database:
         WHY THIS EXISTS. Without it, a service whose lifespan connects at
         startup simply crashes when the database is not up yet, and relies on
         the container being restarted enough times to eventually get lucky.
-        That is not merely untidy -- on a cold namespace where Postgres and
+        That is not merely untidy, on a cold namespace where Postgres and
         the services are created together, auth-service and ledger-service
         each racked up restarts before stabilising, and a Postgres that took
         longer would have left them in CrashLoopBackOff with its exponential
         backoff making recovery slower the longer the outage lasted.
 
         Retrying here means the pod stays up and simply is not READY until the
-        database answers -- which is exactly what a readiness probe is for.
+        database answers, which is exactly what a readiness probe is for.
         Kubernetes keeps traffic away, nothing restarts, and the service comes
         up on its own the moment Postgres does.
 
         It still gives up eventually. A service that cannot reach its database
-        after 90 seconds has a real problem -- a wrong DSN, a missing Secret,
-        a NetworkPolicy -- and crashing loudly is better than retrying in
+        after 90 seconds has a real problem, a wrong DSN, a missing Secret,
+        a NetworkPolicy, and crashing loudly is better than retrying in
         silence forever.
         """
         import time
@@ -181,7 +181,7 @@ class Database:
         finally:
             conn.close()
 
-    # -- dialect-specific fragments ----------------------------------------
+    #, dialect-specific fragments ----------------------------------------
 
     @property
     def autoincrement_pk(self) -> str:
@@ -203,7 +203,7 @@ class Database:
         This distinction is load-bearing in ledger-service. SQLite raises the
         same IntegrityError for both, and treating a foreign-key violation
         as "already recorded" would silently swallow a posting against a
-        nonexistent account -- reporting success while the money went
+        nonexistent account, reporting success while the money went
         nowhere. Postgres separates them by SQLSTATE (23505 vs 23503);
         SQLite has to be told apart by message text.
         """

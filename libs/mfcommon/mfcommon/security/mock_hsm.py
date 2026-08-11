@@ -4,7 +4,7 @@ would (encrypt a PIN block, verify a MAC), backed by ordinary software keys
 instead of tamper-resistant hardware.
 
 This is a LEARNING STAND-IN ONLY. The encryption here (XOR with a derived
-key) is not cryptographically secure -- a real HSM uses 3DES/AES and never
+key) is not cryptographically secure, a real HSM uses 3DES/AES and never
 lets the key leave dedicated hardware. Never use real PINs, real cards, or
 this code anywhere near production.
 
@@ -12,7 +12,7 @@ Includes a simplified DUKPT-style key derivation: instead of one fixed key
 used forever, each transaction gets its own key, derived from a shared base
 key plus an incrementing counter (a stand-in for a Key Serial Number). Both
 sides can independently re-derive the same per-transaction key from the
-base key and the counter -- so a single leaked transaction key reveals
+base key and the counter, so a single leaked transaction key reveals
 nothing about any other transaction.
 """
 
@@ -29,19 +29,19 @@ class MockHSM:
         """
         Three ways to get a base_key, in priority order:
 
-        1. base_key passed explicitly -- used as-is. This is what every
+        1. base_key passed explicitly, used as-is. This is what every
            existing caller and test already does; behavior is unchanged.
 
-        2. kms + persisted_key_path given -- the base_key is now genuinely
+        2. kms + persisted_key_path given, the base_key is now genuinely
            persistent across restarts, which os.urandom() alone never was.
            On first run, a fresh key is generated via the KMS and its
            ENCRYPTED form is written to persisted_key_path (safe to store,
            since only the KMS's master key can ever decrypt it back). On
            every subsequent run, the encrypted key is read back and
-           decrypted through the KMS -- the actual key material never
+           decrypted through the KMS, the actual key material never
            touches disk in plaintext.
 
-        3. Neither given -- falls back to the original behavior:
+        3. Neither given, falls back to the original behavior:
            os.urandom(16), regenerated fresh every process start. Fine for
            a single-process demo; anything encrypted under this key becomes
            permanently undecryptable the moment the process restarts,
@@ -76,7 +76,7 @@ class MockHSM:
     def _derive_transaction_key(self, ksn: str) -> bytes:
         """
         Simplified stand-in for real DUKPT key derivation (not the actual
-        ANSI X9.24 algorithm) -- but the same core idea: a unique key per
+        ANSI X9.24 algorithm), but the same core idea: a unique key per
         transaction, derived deterministically from a shared secret and a
         counter, so either side can independently compute it.
         """
@@ -103,7 +103,7 @@ class MockHSM:
         return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
 
     def generate_mac(self, message: bytes) -> bytes:
-        """Message Authentication Code -- proves a message wasn't tampered with in transit."""
+        """Message Authentication Code, proves a message wasn't tampered with in transit."""
         return hmac.new(self.base_key, message, hashlib.sha256).digest()[:8]
 
     def verify_mac(self, message: bytes, mac: bytes) -> bool:

@@ -1,9 +1,9 @@
-﻿"""
+"""
 Risk layer: decides whether a transaction should be attempted at all,
 before anything is sent over ISO 8583.
 
 Runtime-order note: this runs BEFORE the security layer, message building,
-or correlation -- it's a gate checked immediately when a request comes in,
+or correlation, it's a gate checked immediately when a request comes in,
 not something bolted on after the fact. If this declines a transaction,
 nothing below it in the stack (PIN encryption, message send, ledger) ever
 runs.
@@ -11,7 +11,7 @@ runs.
 Three signals, none of them certainty on their own:
   - velocity   -- too many attempts, too fast, on the same card
   - amount     -- unusually large, in absolute terms
-  - entry mode -- DE 22 from Layer 1; manual key entry is inherently
+  - entry mode, DE 22 from Layer 1; manual key entry is inherently
                   riskier than a chip read, especially combined with a
                   larger amount
 
@@ -19,7 +19,7 @@ Each rule can escalate the outcome from approve -> review -> decline, and
 the FINAL outcome is whichever rule pushed hardest, with every triggered
 reason collected along the way.
 
-Velocity tracking itself is NOT owned by this class anymore -- it's
+Velocity tracking itself is NOT owned by this class anymore, it's
 injected as a VelocityTracker (see cache/velocity_tracker.py), so this
 class doesn't need to know or care whether "how many recent attempts" is
 answered by a local dict or a shared Redis store. Defaults to the
@@ -71,9 +71,9 @@ class RiskEngine:
 
         recent_count = self.velocity_tracker.record_and_count_recent(card_number, self.velocity_window_seconds)
         if recent_count > self.velocity_decline_count:
-            escalate("decline", f"{recent_count} attempts within {self.velocity_window_seconds:.0f}s -- velocity limit exceeded")
+            escalate("decline", f"{recent_count} attempts within {self.velocity_window_seconds:.0f}s, velocity limit exceeded")
         elif recent_count > self.velocity_review_count:
-            escalate("review", f"{recent_count} attempts within {self.velocity_window_seconds:.0f}s -- elevated velocity")
+            escalate("review", f"{recent_count} attempts within {self.velocity_window_seconds:.0f}s, elevated velocity")
 
         if amount_cents > self.amount_decline_cents:
             escalate("decline", f"amount {amount_cents} cents exceeds hard limit {self.amount_decline_cents}")

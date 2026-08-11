@@ -23,8 +23,8 @@ hsm-base-key*
 .idea/
 .vscode/
 
-# Compiled ACE artifact -- built from ace/, not committed.
+# Compiled ACE artifact, built from ace/, not committed.
 *.bar
 
-# Working directory for make verify -- scratch databases and service logs.
+# Working directory for make verify, scratch databases and service logs.
 .local-run/

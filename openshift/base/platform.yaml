@@ -2,7 +2,7 @@
 # ServiceAccount shared by every application pod.
 #
 # One SA for all seven is a deliberate simplification for a platform with no
-# Kubernetes API access and no cloud IAM bindings -- nothing here reads
+# Kubernetes API access and no cloud IAM bindings, nothing here reads
 # Secrets via the API or assumes a cloud role, so per-service accounts would
 # be seven objects distinguishing nothing. The moment iso8583-adapter needs a
 # real cloud KMS binding, it gets its own SA; that is the trigger to split.
@@ -26,7 +26,7 @@ data:
 
   # Risk thresholds. In the ConfigMap rather than baked into the image
   # specifically because these are the values most likely to need changing at
-  # short notice, in response to an actual attack pattern -- and a threshold
+  # short notice, in response to an actual attack pattern, and a threshold
   # change should be a config rollout, not a rebuild.
   RISK_VELOCITY_WINDOW_SECONDS: "60"
   RISK_VELOCITY_DECLINE_COUNT: "5"
@@ -45,7 +45,7 @@ data:
 #
 # It used to be, and that was a bug: every `oc apply -k` overwrote the real
 # generated values with the repo's REPLACE-ME placeholders. The consequences
-# were quiet and nasty -- every JWT issued before a deploy stopped verifying
+# were quiet and nasty, every JWT issued before a deploy stopped verifying
 # after it, and rotating HSM_MASTER_KEY_HEX made any PIN block encrypted
 # under the old one permanently undecryptable.
 #
@@ -66,7 +66,7 @@ metadata:
   name: api-gateway
   annotations:
     # Payments, so no plaintext. edge termination means TLS ends at the
-    # router and in-cluster traffic is plain HTTP -- acceptable inside a
+    # router and in-cluster traffic is plain HTTP, acceptable inside a
     # namespace with NetworkPolicies, and the point at which a real PCI
     # environment would move to re-encrypt with mTLS via a service mesh.
     haproxy.router.openshift.io/timeout: "60s"
@@ -83,7 +83,7 @@ spec:
 ---
 # Default deny. Without this, every pod in the namespace can reach every
 # other pod, and the careful separation of iso8583-adapter as the only holder
-# of key material means nothing -- any compromised pod could just call it.
+# of key material means nothing, any compromised pod could just call it.
 #
 # NetworkPolicy is additive: this denies everything, and the policies below
 # re-admit specific paths.
@@ -113,7 +113,7 @@ spec:
 
 ---
 # api-gateway may reach auth, transaction, and ledger. It may NOT reach
-# risk-service or iso8583-adapter directly -- those are the orchestrator's to
+# risk-service or iso8583-adapter directly, those are the orchestrator's to
 # call, and letting the edge reach them would route around the saga.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -206,7 +206,7 @@ spec:
 ---
 # Persisted, KMS-wrapped HSM base key.
 #
-# ReadWriteOnce, and iso8583-adapter runs exactly one replica -- see the note
+# ReadWriteOnce, and iso8583-adapter runs exactly one replica, see the note
 # on its Deployment. RWO would in any case prevent two pods on different
 # nodes from mounting this, which is a useful guardrail against someone
 # raising the replica count without reading that note.
@@ -262,7 +262,7 @@ spec:
       stabilizationWindowSeconds: 300
 
 ---
-# Keeps a quorum during voluntary disruption -- a node drain must not take
+# Keeps a quorum during voluntary disruption, a node drain must not take
 # every gateway replica at once.
 apiVersion: policy/v1
 kind: PodDisruptionBudget

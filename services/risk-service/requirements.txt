@@ -1,4 +1,4 @@
-# mfcommon is installed from source by the Dockerfile, not listed here --
+# mfcommon is installed from source by the Dockerfile, not listed here,
 # it is a path dependency inside this repo, not something to resolve from
 # an index. For local development: pip install -e libs/mfcommon
 fastapi>=0.110

@@ -1,7 +1,7 @@
 # ACE integration server overrides.
 #
 # Mounted at /home/aceuser/ace-server/overrides/server.conf.yaml, which
-# layers on top of the image defaults rather than replacing them -- so an
+# layers on top of the image defaults rather than replacing them, so an
 # ACE upgrade does not silently discard settings this file never mentioned.
 
 Defaults:
@@ -19,7 +19,7 @@ Statistics:
   Snapshot:
     publicationOn: 'active'
     # Per-node timings. This is how you find out whether latency is the
-    # switch, the DFDL parse, or the SOAP serialization -- a question that is
+    # switch, the DFDL parse, or the SOAP serialization, a question that is
     # otherwise pure guesswork.
     nodeDataLevel: 'basic'
     outputFormat: 'json'
@@ -36,12 +36,12 @@ ResourceManagers:
 
 # Values below are placeholders overridden per environment via BAR overrides
 # (see overrides/) or the Deployment's environment variables. They are NOT
-# secrets -- the switch host is not sensitive, and nothing here needs to be.
+# secrets, the switch host is not sensitive, and nothing here needs to be.
 UserDefined:
   SwitchHost: 'host-simulator'
   SwitchPort: 9999
   # Must be LOWER than iso8583-adapter's ISO8583_SOAP_TIMEOUT_SECONDS (20s).
   # If the adapter gives up first, it manufactures an "unknown" outcome for a
-  # transaction ACE was about to resolve cleanly -- inventing ambiguity that
+  # transaction ACE was about to resolve cleanly, inventing ambiguity that
   # did not exist, and triggering an unnecessary reversal.
   SwitchTimeoutSeconds: 10

@@ -1,5 +1,5 @@
-﻿---
-# analytics-sync -- incremental ledger â†’ ClickHouse load.
+---
+# analytics-sync, incremental ledger â†’ ClickHouse load.
 #
 # A CronJob, not a Deployment: it runs to completion and exits with a status
 # code. Same shape as the monolith's reconciliation job, and the right shape
@@ -13,13 +13,13 @@ metadata:
     app.kubernetes.io/part-of: microfinance
 spec:
   schedule: "0 * * * *"          # hourly, on the hour
-  timeZone: "UTC"                # never the node's local zone -- a DST shift
+  timeZone: "UTC"                # never the node's local zone, a DST shift
                                  # would otherwise skip or repeat an hour
 
   # THE IMPORTANT ONE. Forbid means a run that overruns its window is not
   # joined by the next. Two concurrent syncs would both read from the same
-  # watermark, both load the same rows, and -- because the materialized view
-  # fires on INSERT, before ReplacingMergeTree deduplicates -- double-count
+  # watermark, both load the same rows, and, because the materialized view
+  # fires on INSERT, before ReplacingMergeTree deduplicates, double-count
   # every one of them in agg_daily_volume. The fact table would self-correct;
   # the aggregate would not.
   concurrencyPolicy: Forbid
@@ -68,7 +68,7 @@ spec:
                 # Reads through ledger-service's API, NOT its database.
                 # Querying another service's tables directly is the single
                 # most common way a microservice split collapses back into a
-                # shared schema -- ledger-service could then never change
+                # shared schema, ledger-service could then never change
                 # ledger_entries without breaking a job it does not know
                 # exists. /internal/ledger/export is a contract; the table is
                 # not.
@@ -88,8 +88,8 @@ spec:
 # Ledger integrity check.
 #
 # Asserts that total debits equal total credits across the whole ledger. If
-# that is ever false, something has gone genuinely wrong -- a partial write,
-# a bug, or tampering -- and the correct response is to stop and investigate,
+# that is ever false, something has gone genuinely wrong, a partial write,
+# a bug, or tampering, and the correct response is to stop and investigate,
 # never to retry.
 #
 # Separate from analytics-sync on purpose: this is a correctness alarm, and
@@ -128,7 +128,7 @@ spec:
                 - /bin/sh
                 - -c
                 # Exits non-zero when the ledger does not balance, which is
-                # what the Job's failure -- and therefore the alert -- keys
+                # what the Job's failure, and therefore the alert, keys
                 # off. No parsing of log output required.
                 - |
                   set -eu
@@ -140,7 +140,7 @@ spec:
                   print('true' if r.json()['balanced'] else 'false')
                   ")
                   if [ "$BALANCED" != "true" ]; then
-                    echo "LEDGER DOES NOT BALANCE -- total debits != total credits."
+                    echo "LEDGER DOES NOT BALANCE, total debits != total credits."
                     echo "Do not retry. Investigate before processing further transactions."
                     exit 1
                   fi

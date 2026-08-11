@@ -1,14 +1,14 @@
 """
 Velocity tracking, swappable the same way the idempotency store is.
 
-The in-memory version is exactly what RiskEngine used to do internally --
+The in-memory version is exactly what RiskEngine used to do internally,
 extracted here so it can be swapped for the Redis version without
 RiskEngine's own rules changing at all.
 
 The Redis version uses a sorted set per card: ZADD records an attempt with
 its timestamp as the score, ZREMRANGEBYSCORE prunes anything older than
 the window, ZCARD counts what's left. This is the same sliding-window
-algorithm the in-memory version runs -- just backed by a store every
+algorithm the in-memory version runs, just backed by a store every
 replica shares, so an attacker spreading attempts across multiple pods
 can't evade detection by hitting a different one each time.
 """

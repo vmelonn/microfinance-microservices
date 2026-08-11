@@ -1,4 +1,4 @@
-﻿"""
+"""
 Tests for the SOAP boundary.
 
 The fault tests carry the most weight here. A SOAP fault misread as a
@@ -23,7 +23,7 @@ from mfcommon.soap.envelope import (
 
 
 def test_envelope_round_trips_through_the_server_side_parser():
-    """What the client builds is exactly what the server can read -- the
+    """What the client builds is exactly what the server can read, the
     property that makes ace-stub and ACE interchangeable."""
     payload = build_envelope(
         "authorizeRequest",
@@ -96,7 +96,7 @@ def test_fault_raises_rather_than_returning_a_dict():
 
 
 def test_client_fault_is_distinguishable_from_server_fault():
-    """Client faults must never be retried -- the identical bad request
+    """Client faults must never be retried, the identical bad request
     produces the identical rejection. Server faults may be transient."""
     client_fault = build_fault("soapenv:Client", "pan is not 12-19 digits")
     with pytest.raises(SoapFault) as exc_info:

@@ -1,5 +1,5 @@
 """
-api-gateway -- the only service with an OpenShift Route.
+api-gateway, the only service with an OpenShift Route.
 
 Everything else in the platform is namespace-internal. This is the single
 door, and it owns the concerns that apply to EVERY request rather than to
@@ -13,7 +13,7 @@ any one use case:
 WHY IDEMPOTENCY IS CLAIMED HERE and not in transaction-service: because it
 must happen before ANY step of the saga runs. Claiming inside the
 orchestrator would still allow two concurrent duplicates to both pass risk
-evaluation before either claimed -- so a retried purchase would count twice
+evaluation before either claimed, so a retried purchase would count twice
 against the velocity window and could push a legitimate customer into a
 decline. The claim is the first thing that happens after authentication.
 
@@ -21,7 +21,7 @@ WHY JWT VERIFICATION IS LOCAL: calling auth-service on every request would
 add a round trip to every call and make an auth-service outage a total
 platform outage. The signature is verifiable with the shared secret alone.
 The cost is a window, bounded by the token lifetime, in which a deleted
-user's token still works -- an acceptable trade at a one-hour lifetime, and
+user's token still works, an acceptable trade at a one-hour lifetime, and
 /internal/auth/introspect exists for callers that need certainty.
 """
 
@@ -60,7 +60,7 @@ log = configure_logging("api-gateway", os.environ.get("LOG_LEVEL", "INFO"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if JWT_SECRET == _DEV_SECRET:
-        log.warning("JWT_SECRET is unset -- using the published development default.")
+        log.warning("JWT_SECRET is unset, using the published development default.")
 
     app.state.auth = ServiceClient("auth-service", AUTH_URL, timeout=5.0)
     # Generous: this one wraps the whole saga including the switch round trip.
@@ -74,12 +74,12 @@ async def lifespan(app: FastAPI):
         client.ping()
         app.state.idempotency = RedisIdempotencyStore(client)
         app.state.redis = client
-        log.info("idempotency backed by Redis -- safe across replicas")
+        log.info("idempotency backed by Redis, safe across replicas")
     else:
         app.state.idempotency = InMemoryIdempotencyStore()
         app.state.redis = None
         log.warning(
-            "REDIS_URL is not set -- idempotency is per-process. With more than one "
+            "REDIS_URL is not set, idempotency is per-process. With more than one "
             "gateway replica a retry landing on a different pod will be processed "
             "again as if new, which for a purchase means charging twice."
         )
@@ -129,7 +129,7 @@ def current_user(request: Request, authorization: str = Header(None)) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Schemas -- the PUBLIC contract. Amounts are decimal currency here and
+# Schemas, the PUBLIC contract. Amounts are decimal currency here and
 # converted to integer cents exactly once, on the way in.
 # --------------------------------------------------------------------------
 
@@ -181,7 +181,7 @@ def register(body: RegisterRequest, request: Request):
     """
     A two-service saga: create the user in auth-service, then the account
     and card in ledger-service. If the second fails, the first is
-    compensated by deleting the user -- otherwise a failed registration
+    compensated by deleting the user, otherwise a failed registration
     leaves a user who can log in, owns nothing, and whose CNIC now blocks
     them from trying again.
     """
@@ -211,7 +211,7 @@ def register(body: RegisterRequest, request: Request):
                 "DELETE", f"/internal/auth/users/{user['user_id']}", retries=2, timeout=None
             )
         except Exception as compensation_error:  # noqa: BLE001
-            # The compensation itself failed. Say so loudly -- this leaves
+            # The compensation itself failed. Say so loudly, this leaves
             # an orphaned user row that a human must clean up.
             log.error(
                 f"COMPENSATION FAILED: user {user['user_id']} exists with no account "
@@ -253,7 +253,7 @@ def _claim(state, key: str, body: BaseModel):
     outcome = state.idempotency.claim(key, request_hash)
 
     if outcome.status == "mismatch":
-        # Same key, DIFFERENT body. Almost always a client bug -- reusing a
+        # Same key, DIFFERENT body. Almost always a client bug, reusing a
         # key for a new transaction. Returning the cached response would
         # silently answer the wrong question, so this is rejected loudly.
         raise HTTPException(
@@ -297,7 +297,7 @@ def purchase(body: PurchaseRequest, request: Request, user: dict = Depends(curre
     except ServiceCallError as exc:
         # Deliberately NOT cached. The outcome is unknown, and caching an
         # error would make every retry of this key return the same error
-        # forever -- even though the transaction may have succeeded, or may
+        # forever, even though the transaction may have succeeded, or may
         # succeed on a genuine retry.
         raise HTTPException(status_code=503, detail=f"Transaction service unavailable: {exc}")
 

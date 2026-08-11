@@ -1,7 +1,7 @@
 ---
 # ace-stub
 # The ACE stand-in. Replace this Deployment with the real ACE one and
-    # repoint iso8583-adapter's ISO8583_SOAP_ENDPOINT -- nothing else changes.
+    # repoint iso8583-adapter's ISO8583_SOAP_ENDPOINT, nothing else changes.
     # ONE REPLICA: it holds a single stateful TCP connection to the switch
     # and allocates STANs from a per-process counter.
 apiVersion: apps/v1
@@ -75,7 +75,7 @@ spec:
               mountPath: /tmp
 
           # LIVENESS hits /health, which checks only that this process is
-          # responsive. It must NOT check downstreams -- a liveness probe that
+          # responsive. It must NOT check downstreams, a liveness probe that
           # fails during a dependency outage makes OpenShift restart healthy
           # pods, losing in-flight work and fixing nothing.
           livenessProbe:

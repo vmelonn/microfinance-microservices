@@ -1,5 +1,5 @@
 """
-risk-service -- decides whether a transaction should be attempted at all.
+risk-service, decides whether a transaction should be attempted at all.
 
 Called by transaction-service BEFORE anything else happens: before the PIN
 is encrypted, before a message is built, before the switch is contacted. If
@@ -62,12 +62,12 @@ async def lifespan(app: FastAPI):
         client.ping()  # fail at startup, not on the first transaction
         tracker = RedisVelocityTracker(client)
         app.state.redis = client
-        log.info(f"velocity state in Redis ({REDIS_URL}) -- shared across replicas")
+        log.info(f"velocity state in Redis ({REDIS_URL}), shared across replicas")
     else:
         tracker = InMemoryVelocityTracker()
         app.state.redis = None
         log.warning(
-            "REDIS_URL is not set -- velocity state is per-process. Correct for a "
+            "REDIS_URL is not set, velocity state is per-process. Correct for a "
             "single replica ONLY; with more than one, attempts split across pods "
             "will not be counted together and velocity rules become bypassable."
         )
@@ -127,7 +127,7 @@ def evaluate(body: EvaluateRequest, request: Request):
 @app.get("/internal/risk/config")
 def config():
     """Exposed so the current thresholds are observable without shelling
-    into a pod -- a decline nobody can explain is a support burden."""
+    into a pod, a decline nobody can explain is a support burden."""
     return {"thresholds": CONFIG, "velocity_backend": "redis" if REDIS_URL else "in-memory"}
 
 

@@ -6,7 +6,7 @@ a SOAP request. Everything above it speaks JSON; everything below it speaks
 ISO 8583. Keeping that translation in exactly one file is the reason the
 ACE swap is a one-variable change.
 
-TIMEOUT SEMANTICS -- the part that actually matters:
+TIMEOUT SEMANTICS, the part that actually matters:
 
 A timeout here is NOT "the transaction failed." It is "we do not know
 whether the transaction happened." ACE may have already forwarded the 0200
@@ -17,7 +17,7 @@ the single worst outcome this system can produce.
 
 So SoapTimeout is raised as its own exception type, distinct from any other
 error, and the caller (iso8583-adapter) responds to it by triggering a
-reversal -- exactly what correlation/tracker.py does in the monolith when
+reversal, exactly what correlation/tracker.py does in the monolith when
 send_and_wait() times out. The behaviour is preserved across the
 decomposition; only the layer that detects it moved.
 """
@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 
 class SoapTimeout(Exception):
     """
-    No response from ACE before the deadline. Outcome genuinely unknown --
+    No response from ACE before the deadline. Outcome genuinely unknown,
     the caller MUST reverse rather than assume either success or failure.
     """
 
@@ -109,7 +109,7 @@ class Iso8583SoapClient:
         except httpx.TimeoutException as exc:
             raise SoapTimeout(
                 f"No response from {self.endpoint} for {operation} within "
-                f"{timeout or self.timeout}s -- transaction outcome is UNKNOWN"
+                f"{timeout or self.timeout}s, transaction outcome is UNKNOWN"
             ) from exc
         except httpx.RequestError as exc:
             # Connection refused / DNS failure means ACE was never reached,
@@ -129,7 +129,7 @@ class Iso8583SoapClient:
                 )
             raise
 
-    # -- operations, matching the three in the WSDL ------------------------
+    #, operations, matching the three in the WSDL ------------------------
 
     def authorize(
         self,
@@ -183,7 +183,7 @@ class Iso8583SoapClient:
         outcome is unknown. ACE builds DE 90 (original data elements) from
         original_mti + original_stan.
 
-        A reversal must itself be retried until acknowledged -- an unacked
+        A reversal must itself be retried until acknowledged, an unacked
         reversal leaves the cardholder debited for a transaction we already
         decided did not happen.
         """

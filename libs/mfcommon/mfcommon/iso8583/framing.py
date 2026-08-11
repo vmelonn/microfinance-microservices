@@ -1,7 +1,7 @@
 """
 Message framing for ISO 8583 over TCP.
 
-Real switches don't send raw messages on the wire -- each message is
+Real switches don't send raw messages on the wire, each message is
 preceded by an MLI (Message Length Indicator), a fixed-size integer stating
 how many bytes follow. TCP is just a continuous stream with no built-in
 message boundaries, so this framing is what lets a receiver correctly split
@@ -14,7 +14,7 @@ import socket
 def read_exact(sock: socket.socket, num_bytes: int) -> bytes:
     """
     A single recv() call isn't guaranteed to return all the bytes you asked
-    for -- it can return fewer. This loops until exactly num_bytes have been
+    for, it can return fewer. This loops until exactly num_bytes have been
     read, or raises if the connection closes before that happens.
     """
     chunks = bytearray()

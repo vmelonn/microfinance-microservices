@@ -1,5 +1,5 @@
-﻿"""
-The ledger's data layer -- the only code in the platform that writes money.
+"""
+The ledger's data layer, the only code in the platform that writes money.
 
 The single most important line in this file is the PRIMARY KEY on
 transactions.rrn. Everything upstream (the gateway's idempotency claim, the
@@ -28,7 +28,7 @@ class LedgerRepository:
     def __init__(self, db: Database):
         self.db = db
 
-    # -- schema -------------------------------------------------------------
+    #, schema -------------------------------------------------------------
 
     def init_schema(self) -> None:
         ts = self.db.timestamp_type
@@ -85,7 +85,7 @@ class LedgerRepository:
                 "CREATE INDEX IF NOT EXISTS idx_cards_account ON cards(account_id)"
             )
 
-    # -- identity -----------------------------------------------------------
+    #, identity -----------------------------------------------------------
 
     def create_account(self, user_id: str, card_number: str, account_type: str = "checking") -> dict:
         account_id = f"acc_{uuid.uuid4().hex[:12]}"
@@ -107,7 +107,7 @@ class LedgerRepository:
         """
         Translates a card number OR a raw account ID into the real account ID.
 
-        Card first, because that is the common path -- a purchase carries a
+        Card first, because that is the common path, a purchase carries a
         PAN, not an account ID.
         """
         with self.db.cursor() as cur:
@@ -132,7 +132,7 @@ class LedgerRepository:
             row = cur.fetchone()
             return row[0] if row else None
 
-    # -- money --------------------------------------------------------------
+    #, money --------------------------------------------------------------
 
     def record_posting(
         self, rrn: str, debit_account: str, credit_account: str, amount_cents: int, kind: str = "purchase"
@@ -143,7 +143,7 @@ class LedgerRepository:
 
         Returns status "recorded" on first write, "already_recorded" if this
         RRN was seen before. The caller does not need to distinguish them for
-        correctness -- that is the point -- but the saga logs which happened.
+        correctness, that is the point, but the saga logs which happened.
 
         The IntegrityError handling here is the subtle part. SQLite raises
         the SAME exception type for a duplicate primary key and for a
@@ -200,7 +200,7 @@ class LedgerRepository:
     def is_balanced(self) -> bool:
         """
         Across the WHOLE ledger, total debits must equal total credits. If
-        this is ever false, something has gone genuinely wrong -- a partial
+        this is ever false, something has gone genuinely wrong, a partial
         write, a bug, or tampering. Exposed as an endpoint so the
         reconciliation job can assert it on a schedule rather than only in
         tests.
@@ -235,7 +235,7 @@ class LedgerRepository:
         """
         Feeds analytics-sync. Joins each transaction to its debit and credit
         entries, because the transactions table alone does not carry account
-        IDs -- only the entries tied to it do.
+        IDs, only the entries tied to it do.
 
         Ordered by created_at so the caller's watermark advances
         monotonically; without ORDER BY, a partial batch would leave the

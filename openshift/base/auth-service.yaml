@@ -1,6 +1,6 @@
 ---
 # auth-service
-# Owns the users table. No Route -- reachable only from api-gateway.
+# Owns the users table. No Route, reachable only from api-gateway.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -68,7 +68,7 @@ spec:
               mountPath: /tmp
 
           # LIVENESS hits /health, which checks only that this process is
-          # responsive. It must NOT check downstreams -- a liveness probe that
+          # responsive. It must NOT check downstreams, a liveness probe that
           # fails during a dependency outage makes OpenShift restart healthy
           # pods, losing in-flight work and fixing nothing.
           livenessProbe:

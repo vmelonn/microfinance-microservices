@@ -1,4 +1,4 @@
-﻿"""
+"""
 Correlation layer: matches responses to the requests that caused them, using
 the STAN (DE 11) that Layer 1 already puts in every message. Owns the
 timeout -> reversal decision when a response never arrives.
@@ -7,7 +7,7 @@ This is the layer that lets everything above it pretend a transaction is a
 simple synchronous call. send_and_wait() blocks and returns a result, even
 though underneath, the actual exchange over the socket is fully
 asynchronous and Layer 2 has no idea which response belongs to which
-request -- that bookkeeping happens entirely here.
+request, that bookkeeping happens entirely here.
 """
 
 import threading
@@ -24,7 +24,7 @@ class PendingRequest:
 class TransactionTimeout(Exception):
     """
     Raised when no response arrives before the timeout expires.
-    By the time this is raised, a reversal has already been sent --
+    By the time this is raised, a reversal has already been sent,
     the caller doesn't need to (and shouldn't) send one itself.
     """
     pass
@@ -52,7 +52,7 @@ class CorrelationManager:
         if pending is not None:
             pending.response = parsed
             pending.event.set()
-            return  # matched to a waiting request -- absorbed here, goes no further
+            return  # matched to a waiting request, absorbed here, goes no further
 
         if self._downstream_on_message:
             self._downstream_on_message(parsed)
@@ -61,7 +61,7 @@ class CorrelationManager:
         """
         Sends a transaction and blocks until its matching response arrives,
         or the timeout expires. On timeout, sends a reversal automatically
-        and raises TransactionTimeout -- the caller never has to think
+        and raises TransactionTimeout, the caller never has to think
         about STANs, timers, or reversal logic itself.
         """
         stan = self.client.next_stan()
@@ -79,7 +79,7 @@ class CorrelationManager:
                 self._send_reversal(mti, stan)
                 raise TransactionTimeout(
                     f"No response for STAN {stan} within "
-                    f"{timeout or self.timeout_seconds}s -- reversal sent"
+                    f"{timeout or self.timeout_seconds}s, reversal sent"
                 )
             return pending.response
         finally:

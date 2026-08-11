@@ -1,6 +1,6 @@
 ---
 # api-gateway
-# The only service with a Route. Two replicas by default -- the whole
+# The only service with a Route. Two replicas by default, the whole
     # reason idempotency state lives in Redis rather than in process memory.
 apiVersion: apps/v1
 kind: Deployment
@@ -75,7 +75,7 @@ spec:
               mountPath: /tmp
 
           # LIVENESS hits /health, which checks only that this process is
-          # responsive. It must NOT check downstreams -- a liveness probe that
+          # responsive. It must NOT check downstreams, a liveness probe that
           # fails during a dependency outage makes OpenShift restart healthy
           # pods, losing in-flight work and fixing nothing.
           livenessProbe:

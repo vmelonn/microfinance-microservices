@@ -1,14 +1,14 @@
-<title>Microfinance Microservices — Architecture</title>
+<title>Microfinance Microservices, Architecture</title>
 <style>
   /* ===================================================================
-     TOKENS — companion palette to microfinance-stack's reference doc.
+     TOKENS, companion palette to microfinance-stack's reference doc.
 
      Same family, different emphasis: the monolith doc leads with copper
      (the binary ISO 8583 world). This one leads with petrol blue, because
      its subject is the integration boundary. Copper is still here, but it
      marks only the places where data is genuinely binary.
 
-     Light on bare :root. Dark redefines ONLY tokens, twice — under
+     Light on bare :root. Dark redefines ONLY tokens, twice, under
      prefers-color-scheme (guarded so an explicit light choice beats a dark
      OS) and under [data-theme="dark"] so a toggle wins both ways. No
      component declares a colour outside this block.
@@ -24,9 +24,9 @@
     --ink-soft:      #52626F;
     --ink-faint:     #7D8C99;
 
-    --accent:        #1F6F8B;   /* petrol — the SOAP / integration boundary */
+    --accent:        #1F6F8B;   /* petrol, the SOAP / integration boundary */
     --accent-sunk:   #E0EDF2;
-    --accent-2:      #B4531A;   /* copper — binary ISO 8583 */
+    --accent-2:      #B4531A;   /* copper, binary ISO 8583 */
     --accent-2-sunk: #F6EAE1;
 
     --ok:            #2E7D5B;
@@ -240,7 +240,7 @@
   svg .ln-d  { stroke: var(--ink-faint); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
   svg .life  { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 4; }
 
-  /* Service cards — the structural device here, because the subject is a
+  /* Service cards, the structural device here, because the subject is a
      set of independently deployable things rather than a stack of layers. */
   .svcs { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin: 1.75rem 0; }
   .svc { background: var(--surface); padding: 1rem 1.1rem; }
@@ -272,7 +272,7 @@
     <h1>REST outside.<br>SOAP at the boundary.<br>ISO 8583 on the wire.</h1>
     <p class="standfirst">
       The same eight layers as the monolith, split along ownership boundaries
-      into seven OpenShift services — plus everything a network forces you to
+      into seven OpenShift services, plus everything a network forces you to
       confront that a single process let you ignore.
     </p>
     <div class="facts">
@@ -385,7 +385,7 @@
         <figcaption>
           Everything above the adapter is REST/JSON. Everything below ACE is
           binary. The adapter is the only service that speaks SOAP, and the
-          only one holding key material — one pod, one NetworkPolicy, one
+          only one holding key material, one pod, one NetworkPolicy, one
           blast radius.
         </figcaption>
       </figure>
@@ -435,13 +435,13 @@
         </div>
         <div class="svc">
           <h4>ledger-service</h4><span class="port">:8084 · own Postgres</span>
-          <p>Double-entry postings, idempotent on RRN. Knows nothing about purchases, risk, or solvency — it records balanced journal entries.</p>
+          <p>Double-entry postings, idempotent on RRN. Knows nothing about purchases, risk, or solvency, it records balanced journal entries.</p>
           <span class="reps">2 replicas</span>
         </div>
         <div class="svc crypto">
           <h4>iso8583-adapter</h4><span class="port">:8085 · REST→SOAP</span>
           <p>The protocol boundary and the crypto edge. The only service that speaks SOAP and the only one that can produce a PIN block.</p>
-          <span class="reps">1 replica — see below</span>
+          <span class="reps">1 replica, see below</span>
         </div>
         <div class="svc">
           <h4>analytics-sync</h4><span class="port">CronJob · no port</span>
@@ -465,7 +465,7 @@
         <p>
           Each pod derives per-transaction PIN keys from its own persisted HSM
           base key. Two replicas hold <em>different</em> keys, so a PIN block
-          encrypted by one cannot be decrypted by the other — and the failure
+          encrypted by one cannot be decrypted by the other, and the failure
           would look like sporadic <code>DE 39 = 55</code> declines rather than
           anything pointing at replica count. Scaling this out needs a shared
           KMS-backed key, not a higher number in the Deployment.
@@ -499,7 +499,7 @@
         Business rules deliberately stay out. Risk thresholds live in
         risk-service; accounting rules live in ledger-service. A shared library
         that accumulates business logic is how a microservice split quietly
-        becomes a distributed monolith — every service redeploying because one
+        becomes a distributed monolith, every service redeploying because one
         service's rule changed.
       </p>
     </section>
@@ -517,7 +517,7 @@
           <thead><tr><th>Operation</th><th>MTI</th><th>Purpose</th></tr></thead>
           <tbody>
             <tr><td class="mono">authorize</td><td class="mono">0200 → 0210</td><td>Financial authorization. Blocks until the switch answers or the gateway's timeout expires.</td></tr>
-            <tr><td class="mono">reverse</td><td class="mono">0400 → 0410</td><td>Reversal advice. Idempotent at the switch, so safe — and required — to retry until acknowledged.</td></tr>
+            <tr><td class="mono">reverse</td><td class="mono">0400 → 0410</td><td>Reversal advice. Idempotent at the switch, so safe, and required, to retry until acknowledged.</td></tr>
             <tr><td class="mono">networkManagement</td><td class="mono">0800 → 0810</td><td>Sign-on, sign-off, echo. The echo is what the readiness probe calls.</td></tr>
           </tbody>
         </table>
@@ -551,8 +551,8 @@ SOAPAction: <span class="s">"urn:microfinance:iso8583:v1/authorizeRequest"</span
         <span class="tag">Why the PIN block is hex</span>
         <p>
           DE 52 is eight bytes of ciphertext containing arbitrary byte values,
-          and several of those — <code>0x00–0x08</code>, <code>0x0B</code>,
-          <code>0x0C</code>, <code>0x0E–0x1F</code> — are <strong>illegal in
+          and several of those, <code>0x00, 0x08</code>, <code>0x0B</code>,
+          <code>0x0C</code>, <code>0x0E, 0x1F</code>, are <strong>illegal in
           XML 1.0</strong>. Not awkward to escape: forbidden, with no escape
           sequence that makes them legal.
         </p>
@@ -571,7 +571,7 @@ SOAPAction: <span class="s">"urn:microfinance:iso8583:v1/authorizeRequest"</span
       <p>
         <strong>Hand-rolled, not zeep.</strong> zeep compiles the WSDL at
         client construction, so process startup acquires a hard network
-        dependency on ACE being reachable — an ACE restart would cascade into
+        dependency on ACE being reachable, an ACE restart would cascade into
         the adapter failing its readiness probe. The contract is three
         operations; it needs to be obvious and to fail loudly, not to be
         inferred.
@@ -579,7 +579,7 @@ SOAPAction: <span class="s">"urn:microfinance:iso8583:v1/authorizeRequest"</span
       <p>
         <strong>Absent fields are omitted, never sent empty.</strong> In ISO
         8583 an absent data element and a present-but-empty one are different
-        messages — the bitmap bit differs — and a real switch answers the
+        messages, the bitmap bit differs, and a real switch answers the
         second with <code>DE 39 = 30</code>, format error.
       </p>
       <p>
@@ -587,7 +587,7 @@ SOAPAction: <span class="s">"urn:microfinance:iso8583:v1/authorizeRequest"</span
         fault arrives as HTTP 500 with a well-formed body, and some stacks
         return faults as HTTP 200. Branching on status alone either retries a
         transaction the switch explicitly refused, or parses a fault as
-        success. And SOAP 1.1 fault children are <em>unqualified</em> — a
+        success. And SOAP 1.1 fault children are <em>unqualified</em>, a
         parser looking for them in the envelope namespace finds nothing and
         reports a fault with no message.
       </p>
@@ -596,7 +596,7 @@ SOAPAction: <span class="s">"urn:microfinance:iso8583:v1/authorizeRequest"</span
         <table>
           <thead><tr><th>Fault category</th><th>Reached the switch?</th><th>Caller must</th></tr></thead>
           <tbody>
-            <tr><td class="mono">VALIDATION</td><td>no</td><td>Never retry — the identical request fails identically.</td></tr>
+            <tr><td class="mono">VALIDATION</td><td>no</td><td>Never retry, the identical request fails identically.</td></tr>
             <tr><td class="mono">SWITCH_DOWN</td><td>no</td><td>Fail cleanly. No reversal needed; nothing was authorized.</td></tr>
             <tr><td class="mono">SWITCH_TIMEOUT</td><td><strong>unknown</strong></td><td>Reverse, skip the ledger, flag for reconciliation.</td></tr>
           </tbody>
@@ -669,7 +669,7 @@ SOAPAction: <span class="s">"urn:microfinance:iso8583:v1/authorizeRequest"</span
         </div>
         <figcaption>
           The two Compute modules and the timeout handler are written. Wiring
-          the graph is Toolkit work — a <code>.msgflow</code> is Eclipse EMF
+          the graph is Toolkit work, a <code>.msgflow</code> is Eclipse EMF
           XMI with internal identifiers, and hand-authoring one produces a file
           that either fails to open or opens subtly wrong.
         </figcaption>
@@ -711,7 +711,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
       <p>
         <code>ISO8583.xsd</code> and <code>mfcommon/iso8583/parser.py</code>
         are two independent implementations of the same binary format. They
-        <em>will</em> drift — not might — unless something forces them
+        <em>will</em> drift, not might, unless something forces them
         together. <code>tests/e2e/test_dfdl_conformance.py</code> is that
         forcing function: 23 assertions pinning the byte-level properties the
         DFDL schema declares.
@@ -742,7 +742,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
       <h2><span class="num">04</span>The saga</h2>
       <p class="lede">
         In the monolith, an exception unwound everything. Across four
-        databases, there is nothing to unwind with — so every step carries a
+        databases, there is nothing to unwind with, so every step carries a
         named compensation.
       </p>
 
@@ -799,7 +799,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
             <text class="tiny" x="560" y="190">reconciliation exception</text>
 
             <rect class="box-x" x="354" y="216" width="350" height="58"/>
-            <text class="sm" x="370" y="236" fill="var(--crit)">THE HARD CASE — step 3 succeeded, step 4 failed</text>
+            <text class="sm" x="370" y="236" fill="var(--crit)">THE HARD CASE, step 3 succeeded, step 4 failed</text>
             <text class="tiny" x="370" y="252">Switch approved. Cardholder debited. Our books show nothing.</text>
             <text class="tiny" x="370" y="266">No clean unwind exists. Reverse; if that fails too, flag a human.</text>
             <path class="ln-x" d="M624 106 L624 130 L690 130 L690 212" marker-end="url(#m7)"/>
@@ -807,7 +807,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         </div>
         <figcaption>
           Retry policy follows directly from this diagram. Step 1 retries
-          freely — it is a lookup. Step 2 never retries, because evaluating
+          freely, it is a lookup. Step 2 never retries, because evaluating
           records an attempt and a retry inflates the caller's own velocity
           toward a decline. Step 3 never retries, because a retry is a second
           real authorization. Step 4 retries three times, because
@@ -819,12 +819,12 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         <table>
           <thead><tr><th>Step fails</th><th>Retries</th><th>Compensation</th></tr></thead>
           <tbody>
-            <tr><td>risk evaluate — timeout or 5xx</td><td class="mono">0</td><td><strong>Fail closed.</strong> A risk service that is down must not become one that approves everything.</td></tr>
-            <tr><td>authorize — <code>DE 39 ≠ 00</code></td><td class="mono">0</td><td>Decline. Nothing downstream runs.</td></tr>
-            <tr><td>authorize — timeout</td><td class="mono">0</td><td>Reversal issued; outcome <code>unknown</code>; no ledger posting.</td></tr>
-            <tr><td>ledger — duplicate RRN</td><td>—</td><td>Not an error. <code>already_recorded</code>, return the original result.</td></tr>
-            <tr><td>ledger — 5xx after an approval</td><td class="mono">3</td><td>Compensating <code>0400</code>. If that also fails: <code>requires_reconciliation</code> and a human.</td></tr>
-            <tr><td>registration — account creation fails</td><td class="mono">0</td><td>Delete the user. Otherwise a failed signup leaves someone who can log in, owns nothing, and whose CNIC blocks a retry.</td></tr>
+            <tr><td>risk evaluate, timeout or 5xx</td><td class="mono">0</td><td><strong>Fail closed.</strong> A risk service that is down must not become one that approves everything.</td></tr>
+            <tr><td>authorize, <code>DE 39 ≠ 00</code></td><td class="mono">0</td><td>Decline. Nothing downstream runs.</td></tr>
+            <tr><td>authorize, timeout</td><td class="mono">0</td><td>Reversal issued; outcome <code>unknown</code>; no ledger posting.</td></tr>
+            <tr><td>ledger, duplicate RRN</td><td>, </td><td>Not an error. <code>already_recorded</code>, return the original result.</td></tr>
+            <tr><td>ledger, 5xx after an approval</td><td class="mono">3</td><td>Compensating <code>0400</code>. If that also fails: <code>requires_reconciliation</code> and a human.</td></tr>
+            <tr><td>registration, account creation fails</td><td class="mono">0</td><td>Delete the user. Otherwise a failed signup leaves someone who can log in, owns nothing, and whose CNIC blocks a retry.</td></tr>
           </tbody>
         </table>
       </div>
@@ -878,7 +878,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
 
       <pre><code><span class="c"># transaction-service, step 3</span>
 <span class="k">if</span> auth[<span class="s">"outcome"</span>] == <span class="s">"unknown"</span>:
-    log.error(<span class="s">f"UNKNOWN outcome rrn={rrn} -- no ledger posting"</span>)
+    log.error(<span class="s">f"UNKNOWN outcome rrn={rrn}, no ledger posting"</span>)
     <span class="k">return</span> TransactionResponse(
         status=<span class="s">"unknown"</span>,
         rrn=rrn,
@@ -894,8 +894,8 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
       <p>
         In the monolith one purchase was one call stack, and a traceback told
         you everything. Here it is seven log streams on seven pods. The gateway
-        mints a correlation ID, every service propagates it unchanged — through
-        the SOAP hop, via a header inside the envelope — and every log line
+        mints a correlation ID, every service propagates it unchanged, through
+        the SOAP hop, via a header inside the envelope, and every log line
         carries it.
       </p>
       <p>
@@ -910,7 +910,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         The claim is taken at the gateway, before any downstream work, via an
         atomic Redis <code>SET NX</code>. Claiming inside the orchestrator
         instead would still let two concurrent duplicates both pass risk
-        evaluation before either claimed — and since evaluating records an
+        evaluation before either claimed, and since evaluating records an
         attempt, the retry would count twice against the velocity window.
       </p>
       <p>
@@ -925,7 +925,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         <code>ZREMRANGEBYSCORE</code> prunes the window,
         <code>ZCARD</code> counts. With per-pod memory instead, six attempts
         spread across three replicas look like two attempts each and every one
-        is approved — the fraud control silently stops working while nothing
+        is approved, the fraud control silently stops working while nothing
         appears wrong.
       </p>
 
@@ -935,7 +935,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         <code>/internal/ledger/export</code> rather than querying
         ledger-service's Postgres directly. Reaching into another service's
         tables is faster and is the single most common way a microservice
-        architecture collapses back into a shared schema — the moment this job
+        architecture collapses back into a shared schema, the moment this job
         selects from <code>ledger_entries</code>, that table can never change
         without breaking a job its owner does not know exists.
       </p>
@@ -947,7 +947,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
           <em>eventually</em>, at background merge time, so re-loading a row is
           safe for the fact table. But the <code>mv_daily_volume</code>
           materialized view fires on <code>INSERT</code>, <em>before</em> that
-          deduplication — so a re-load double-counts in the aggregate even
+          deduplication, so a re-load double-counts in the aggregate even
           though the fact table self-corrects. Advancing the watermark only
           after a confirmed batch is what keeps the aggregates honest, not
           merely what makes the sync fast.
@@ -969,7 +969,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         the namespace, enforced by NetworkPolicy.
       </p>
 
-      <h3>Public — api-gateway :8080</h3>
+      <h3>Public, api-gateway :8080</h3>
 
       <div class="ep">
         <header><span class="pill post">POST</span><span class="path">/users/register</span><span class="auth">public</span></header>
@@ -995,7 +995,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
       <div class="ep">
         <header><span class="pill post">POST</span><span class="path">/transactions/purchase</span><span class="auth">Bearer + ownership</span></header>
         <div class="body">
-          <p>Runs the full saga. <code>amount</code> is decimal currency here and becomes integer cents exactly once, at this boundary — everything below is integers.</p>
+          <p>Runs the full saga. <code>amount</code> is decimal currency here and becomes integer cents exactly once, at this boundary, everything below is integers.</p>
           <pre><code>{ <span class="s">"amount"</span>: <span class="k">25.50</span>, <span class="s">"card_number"</span>: <span class="s">"4532015112830366"</span>,
   <span class="s">"pin"</span>: <span class="s">"1234"</span>, <span class="s">"idempotency_key"</span>: <span class="s">"client-uuid"</span>,
   <span class="s">"entry_mode"</span>: <span class="s">"05"</span> }
@@ -1013,14 +1013,14 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
       <div class="ep">
         <header><span class="pill post">POST</span><span class="path">/transactions/transfer</span><span class="auth">Bearer + ownership</span></header>
         <div class="body">
-          <p>Processing code <code>400000</code>; the recipient's wallet ID travels in DE 103. Self-transfers are rejected — the ledger would still balance, but the row is pure noise.</p>
+          <p>Processing code <code>400000</code>; the recipient's wallet ID travels in DE 103. Self-transfers are rejected, the ledger would still balance, but the row is pure noise.</p>
         </div>
       </div>
 
       <div class="ep">
         <header><span class="pill get">GET</span><span class="path">/accounts/{identifier}/balance</span><span class="auth">Bearer + ownership</span></header>
         <div class="body">
-          <p>Accepts a card number or an account ID. Ownership is checked, not just authentication — otherwise any valid token could read any balance by guessing an ID.</p>
+          <p>Accepts a card number or an account ID. Ownership is checked, not just authentication, otherwise any valid token could read any balance by guessing an ID.</p>
         </div>
       </div>
 
@@ -1029,10 +1029,10 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         <table>
           <thead><tr><th>Service</th><th>Endpoint</th><th>Notes</th></tr></thead>
           <tbody>
-            <tr><td class="mono">auth</td><td class="mono">POST /internal/auth/users</td><td>Not idempotent — a retry creates a second user.</td></tr>
+            <tr><td class="mono">auth</td><td class="mono">POST /internal/auth/users</td><td>Not idempotent, a retry creates a second user.</td></tr>
             <tr><td class="mono">auth</td><td class="mono">POST /internal/auth/login</td><td>Issues the HS256 token.</td></tr>
             <tr><td class="mono">auth</td><td class="mono">DELETE /internal/auth/users/{id}</td><td>The registration saga's compensation. Idempotent by design.</td></tr>
-            <tr><td class="mono">auth</td><td class="mono">POST /internal/auth/introspect</td><td>Verifies <em>and</em> confirms the user still exists — the part local verification cannot do.</td></tr>
+            <tr><td class="mono">auth</td><td class="mono">POST /internal/auth/introspect</td><td>Verifies <em>and</em> confirms the user still exists, the part local verification cannot do.</td></tr>
             <tr><td class="mono">risk</td><td class="mono">POST /internal/risk/evaluate</td><td><strong>Has a side effect.</strong> Records the attempt, so it must never be retried.</td></tr>
             <tr><td class="mono">risk</td><td class="mono">GET /internal/risk/config</td><td>Current thresholds, so a decline can be explained without shelling into a pod.</td></tr>
             <tr><td class="mono">ledger</td><td class="mono">POST /internal/ledger/postings</td><td>Idempotent on RRN. Safe to retry from anywhere.</td></tr>
@@ -1046,10 +1046,10 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
         </table>
       </div>
 
-      <h3>Probes — every service</h3>
+      <h3>Probes, every service</h3>
       <p>
         <code>/health</code> is <strong>liveness</strong>: is this process
-        responsive? It deliberately does <em>not</em> check downstreams — a
+        responsive? It deliberately does <em>not</em> check downstreams, a
         liveness probe that fails during a dependency outage makes OpenShift
         restart healthy pods, losing in-flight work and fixing nothing.
       </p>
@@ -1077,7 +1077,7 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
             <tr><td class="mono">Postgres · auth</td><td>auth-service</td><td><code>users</code></td><td>Unrecoverable. Real backups required.</td></tr>
             <tr><td class="mono">Postgres · ledger</td><td>ledger-service</td><td><code>accounts</code>, <code>cards</code>, <code>transactions</code>, <code>ledger_entries</code></td><td>Unrecoverable. This is the money.</td></tr>
             <tr><td class="mono">Redis</td><td>gateway + risk</td><td>Idempotency claims, velocity windows</td><td>Tolerable. Both are TTL'd derived state; the ledger's PRIMARY KEY is the real backstop.</td></tr>
-            <tr><td class="mono">ClickHouse</td><td>analytics-sync</td><td><code>fact_transactions</code>, rollups</td><td>Rebuildable — rerun the sync with an empty watermark.</td></tr>
+            <tr><td class="mono">ClickHouse</td><td>analytics-sync</td><td><code>fact_transactions</code>, rollups</td><td>Rebuildable, rerun the sync with an empty watermark.</td></tr>
           </tbody>
         </table>
       </div>
@@ -1097,8 +1097,8 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
 
       <h3>The one guarantee</h3>
       <p>
-        Everything upstream — the gateway's idempotency claim, the saga's retry
-        policy, the reversal on timeout — is best-effort. The guarantee that
+        Everything upstream, the gateway's idempotency claim, the saga's retry
+        policy, the reversal on timeout, is best-effort. The guarantee that
         cannot be wrong is <code>PRIMARY KEY (rrn)</code> on
         <code>transactions</code>: one atomic statement, enforced by the
         database, holding however many replicas race. Ten threads released
@@ -1122,14 +1122,14 @@ make smoke</code></pre>
       <p>
         Default deny, then specific paths re-admitted. Without it every pod can
         reach every other pod, and isolating the adapter as the sole holder of
-        key material means nothing — any compromised pod could simply call it.
+        key material means nothing, any compromised pod could simply call it.
       </p>
       <div class="scroll">
         <table>
           <thead><tr><th>From</th><th>May reach</th></tr></thead>
           <tbody>
             <tr><td>OpenShift router</td><td>api-gateway only</td></tr>
-            <tr><td>api-gateway</td><td>auth, transaction, ledger — <em>not</em> risk or the adapter</td></tr>
+            <tr><td>api-gateway</td><td>auth, transaction, ledger, <em>not</em> risk or the adapter</td></tr>
             <tr><td>transaction-service</td><td>risk, ledger, adapter</td></tr>
             <tr><td>iso8583-adapter</td><td>ace-stub / ACE only</td></tr>
             <tr><td>ace-stub / ACE</td><td>the switch only</td></tr>
@@ -1155,7 +1155,7 @@ make smoke</code></pre>
         <p>
           Getting this wrong surfaces as <code>executable file not found in
           $PATH</code>. The file genuinely exists; the assigned UID just cannot
-          read the directory it was installed into — and the error sends you
+          read the directory it was installed into, and the error sends you
           looking in entirely the wrong place.
         </p>
       </div>
@@ -1192,7 +1192,7 @@ make smoke</code></pre>
       <h3>Honest costs</h3>
       <p>
         The decomposition is not free, and the main price is the
-        <code>unknown</code> state. In the monolith it could not occur — a
+        <code>unknown</code> state. In the monolith it could not occur, a
         function call either returned or raised. Here it is a real outcome that
         needs a reversal, a reconciliation queue, and eventually a human.
       </p>
@@ -1211,11 +1211,11 @@ make smoke</code></pre>
       <h3>Known gaps</h3>
       <ul>
         <li><strong>No MAC</strong> on outbound messages. DE 64/128 are modelled and masked but never generated.</li>
-        <li><strong>DE 90 placeholders</strong> in reversals — the simulator only needs MTI and STAN.</li>
+        <li><strong>DE 90 placeholders</strong> in reversals, the simulator only needs MTI and STAN.</li>
         <li><strong>No RBAC.</strong> Any authenticated user is equivalent to any other.</li>
         <li><strong><code>MockHSM</code> is XOR</strong>, not a real HSM. Correct interface, no tamper resistance.</li>
-        <li><strong>Plaintext PIN crosses one internal hop</strong> — gateway to adapter. Mitigated by NetworkPolicy; a real PCI environment wants mTLS.</li>
-        <li><strong>RRN collision is possible</strong> — 1 in 100 within the same second. The PRIMARY KEY turns it into a rejected duplicate rather than corrupted money, but the format should change before real volume.</li>
+        <li><strong>Plaintext PIN crosses one internal hop</strong>, gateway to adapter. Mitigated by NetworkPolicy; a real PCI environment wants mTLS.</li>
+        <li><strong>RRN collision is possible</strong>, 1 in 100 within the same second. The PRIMARY KEY turns it into a rejected duplicate rather than corrupted money, but the format should change before real volume.</li>
         <li><strong>ACE artifacts are unverified.</strong> Written, never compiled or run.</li>
       </ul>
     </section>
@@ -1224,7 +1224,7 @@ make smoke</code></pre>
 
   <footer>
     microfinance-microservices · architecture reference<br>
-    Companion document: microfinance-stack — the monolith this was decomposed from.
+    Companion document: microfinance-stack, the monolith this was decomposed from.
   </footer>
 
 </div>

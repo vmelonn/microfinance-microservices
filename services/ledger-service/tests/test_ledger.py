@@ -3,7 +3,7 @@ Ledger correctness tests.
 
 The concurrency test is the one that matters. Everything else in the platform
 -- the gateway's idempotency claim, the saga's retry policy, the SOAP
-client's reversal-on-timeout -- is best-effort protection against
+client's reversal-on-timeout, is best-effort protection against
 double-processing. The PRIMARY KEY on transactions.rrn is the guarantee that
 cannot be wrong, and this is where it is proven.
 """
@@ -149,7 +149,7 @@ def test_export_is_ordered_and_respects_the_watermark(repo, accounts):
 
 
 def test_export_carries_both_account_ids(repo, accounts):
-    """The transactions table alone has no account IDs -- only the entries
+    """The transactions table alone has no account IDs, only the entries
     tied to it do, which is why export joins them."""
     alice, merchant = accounts
     repo.record_posting("rrnjoin00001", alice["account_id"], merchant["account_id"], 750)

@@ -1,5 +1,5 @@
 """
-PIN block formatting (ISO 9564 Format 0 / ANSI X9.8) -- what happens to a
+PIN block formatting (ISO 9564 Format 0 / ANSI X9.8), what happens to a
 PIN before it's encrypted.
 
 The PIN alone isn't encrypted directly. It's first combined (XORed) with

@@ -9,7 +9,7 @@
 # the entire class of bug this platform's Redis usage exists to prevent:
 # idempotency and velocity state living in one process's memory looks
 # perfectly correct until a retry lands on a different pod. Running two makes
-# that observable -- see tests/e2e/test_cross_replica.py.
+# that observable, see tests/e2e/test_cross_replica.py.
 #
 # THE SOAP HOP: iso8583-adapter -> ace-stub is the single SOAP boundary.
 # To point it at a real ACE integration server instead, change ONE variable:
@@ -48,7 +48,7 @@ services:
       POSTGRES_USER: microfinance
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-password}
       # Two logical databases, one server. In the cluster these are separate
-      # StatefulSets -- database-per-service is about ownership and
+      # StatefulSets, database-per-service is about ownership and
       # independent migration, not about how many processes are running.
       POSTGRES_MULTIPLE_DATABASES: auth,ledger
     volumes:
@@ -69,7 +69,7 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ports:
-      - "8123:8123"     # HTTP interface -- what clickhouse-connect uses
+      - "8123:8123"     # HTTP interface, what clickhouse-connect uses
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     ulimits:
@@ -181,7 +181,7 @@ services:
       ledger-service: {condition: service_started}
       iso8583-adapter: {condition: service_started}
 
-  # Two gateway replicas sharing one Redis -- the point of the cache layer,
+  # Two gateway replicas sharing one Redis, the point of the cache layer,
   # and unprovable with a single process.
   api-gateway-1:
     build:
@@ -216,7 +216,7 @@ services:
 
   # ======================= scheduled work =======================
 
-  # Runs once on `docker compose up` rather than on a schedule -- compose has
+  # Runs once on `docker compose up` rather than on a schedule, compose has
   # no cron. In the cluster this is a CronJob; see
   # openshift/base/analytics-sync-cronjob.yaml.
   analytics-sync:
@@ -238,7 +238,7 @@ services:
   #
   # Uncomment once the entitlement key arrives, then point
   # iso8583-adapter's ISO8583_SOAP_ENDPOINT at http://ace:7800/Iso8583Gateway
-  # and stop ace-stub. Nothing else changes -- ace-stub and ACE serve the
+  # and stop ace-stub. Nothing else changes, ace-stub and ACE serve the
   # same WSDL, and every test above is written against that contract rather
   # than against either implementation.
   #

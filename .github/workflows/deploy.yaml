@@ -1,4 +1,4 @@
-﻿name: OpenShift CI/CD
+name: OpenShift CI/CD
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:        # re-run a deploy without an empty commit
 
 # Also honoured: putting [skip ci] in a commit message skips the run
-# entirely. GitHub handles that natively -- useful for a commit that touches
+# entirely. GitHub handles that natively, useful for a commit that touches
 # code but is not ready to go to the cluster.
 
 # Two pushes in quick succession would otherwise race: one deploy rolling out
@@ -45,12 +45,33 @@ jobs:
           pip install --quiet -e "libs/mfcommon[dev]"
           pip install --quiet fastapi "uvicorn[standard]" httpx pydantic
 
+      # A UTF-8 BOM in a workflow file makes GitHub fail to parse its `on:`
+      # block. The workflow stays registered from whatever version last
+      # parsed and simply stops being triggered, no error, no failed run,
+      # nothing in the UI. It cost an afternoon of "why didn't the push do
+      # anything", so it is now a hard failure at the cheapest possible spot.
+      #
+      # Root cause worth remembering: PowerShell 5.1's
+      # `Set-Content -Encoding utf8` writes a BOM.
+      - name: Reject UTF-8 BOMs
+        run: |
+          FOUND=$(find . -path ./.git -prune -o -type f \
+                    \( -name '*.yaml' -o -name '*.yml' -o -name '*.py' \
+                       -o -name '*.wsdl' -o -name '*.xsd' -o -name '*.sh' \) -print \
+                  | xargs grep -lI $'\xef\xbb\xbf' 2>/dev/null || true)
+          if [ -n "$FOUND" ]; then
+            echo "::error::UTF-8 BOM found, GitHub cannot parse workflow files with one"
+            echo "$FOUND" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "no BOMs"
+
       - name: Shared suites (mfcommon + DFDL conformance)
         run: pytest libs/mfcommon/tests tests -q
 
       - name: Per-service suites
         # Each service owns a top-level `app` package, so they cannot share a
-        # sys.path -- two services' app.main would shadow each other. Hence
+        # sys.path, two services' app.main would shadow each other. Hence
         # one pytest run per service.
         run: |
           for svc in ace-stub ledger-service; do
@@ -74,7 +95,7 @@ jobs:
       # oc installed with curl rather than redhat-actions/openshift-tools-installer.
       # That action targets a deprecated Node runtime, races on the tool cache
       # when jobs run concurrently, and matches eleven candidate tarballs
-      # before picking one -- three of the four warnings on every run came
+      # before picking one, three of the four warnings on every run came
       # from it. This is four lines and has none of those failure modes.
       - name: Install oc
         run: |
@@ -98,14 +119,14 @@ jobs:
       # Create the Secret only if it is absent.
       #
       # It is no longer part of the kustomize base. When it was, every deploy
-      # overwrote the real values with the repo's REPLACE-ME placeholders --
+      # overwrote the real values with the repo's REPLACE-ME placeholders,
       # which silently invalidated every live JWT and, worse, made any PIN
       # block encrypted under the previous HSM_MASTER_KEY_HEX permanently
       # undecryptable.
       - name: Ensure secrets exist (never overwrite)
         run: |
           if oc get secret microfinance-secrets >/dev/null 2>&1; then
-            echo "microfinance-secrets already exists -- leaving it alone."
+            echo "microfinance-secrets already exists, leaving it alone."
           else
             echo "creating microfinance-secrets with generated values"
             oc create secret generic microfinance-secrets \
@@ -121,8 +142,8 @@ jobs:
         run: oc apply -f openshift/build/build.yaml
 
       # NOTE: the `sed -i '/fsGroup:/d'` step that used to live here is gone.
-      # The manifests no longer set fsGroup at all -- restricted-v2 allocates
-      # one from the namespace range and rejects hardcoded values -- so the
+      # The manifests no longer set fsGroup at all, restricted-v2 allocates
+      # one from the namespace range and rejects hardcoded values, so the
       # fix belonged at the source, not in a blind text delete across every
       # YAML file in the repo.
       - name: Apply platform manifests
@@ -159,7 +180,7 @@ jobs:
       # THE IMPORTANT ONE. Nine simultaneous build pods, on top of the twelve
       # already running, exceeded the namespace quota. The build pods were
       # never scheduled, sat Pending, and `--follow` waited for logs from a
-      # pod that did not exist -- five hours of nothing.
+      # pod that did not exist, five hours of nothing.
       #
       # Three at a time bounds the peak. Wall-clock time goes up; builds that
       # actually finish are worth more than builds that start in parallel and
@@ -173,8 +194,8 @@ jobs:
           - risk-service
           - ledger-service
           - iso8583-adapter
-          - ace-stub          # the SOAP gateway -- nothing works without it
-          - host-simulator    # the switch -- likewise
+          - ace-stub          # the SOAP gateway, nothing works without it
+          - host-simulator    # the switch, likewise
           - analytics-sync
     steps:
       - uses: actions/checkout@v4
@@ -182,7 +203,7 @@ jobs:
       # oc installed with curl rather than redhat-actions/openshift-tools-installer.
       # That action targets a deprecated Node runtime, races on the tool cache
       # when jobs run concurrently, and matches eleven candidate tarballs
-      # before picking one -- three of the four warnings on every run came
+      # before picking one, three of the four warnings on every run came
       # from it. This is four lines and has none of those failure modes.
       - name: Install oc
         run: |
@@ -209,7 +230,7 @@ jobs:
       # pod is never scheduled: it waits on output from something that does
       # not exist, printing only "started" while it does. --wait polls the
       # Build's status instead, so Pending, Failed and Cancelled all resolve
-      # properly -- and completionDeadlineSeconds in build.yaml guarantees it
+      # properly, and completionDeadlineSeconds in build.yaml guarantees it
       # resolves at all.
       #
       # The cost is losing live log streaming. Logs are fetched on failure
@@ -229,7 +250,7 @@ jobs:
           echo "--- status ---"
           oc describe build/"$BUILD" | tail -25
           echo "--- logs ---"
-          oc logs build/"$BUILD" --tail=100 || echo "(no logs -- the pod never started)"
+          oc logs build/"$BUILD" --tail=100 || echo "(no logs, the pod never started)"
           echo "--- quota (a Pending build is almost always this) ---"
           oc get resourcequota -o wide 2>/dev/null || true
           oc describe appliedclusterresourcequota 2>/dev/null || true
@@ -253,7 +274,7 @@ jobs:
       # oc installed with curl rather than redhat-actions/openshift-tools-installer.
       # That action targets a deprecated Node runtime, races on the tool cache
       # when jobs run concurrently, and matches eleven candidate tarballs
-      # before picking one -- three of the four warnings on every run came
+      # before picking one, three of the four warnings on every run came
       # from it. This is four lines and has none of those failure modes.
       - name: Install oc
         run: |
@@ -277,7 +298,7 @@ jobs:
       # Restart everything first, then wait for everything.
       #
       # Previously this restarted and waited service-by-service, which made
-      # the worst case the SUM of eight timeouts -- longer than the job's own
+      # the worst case the SUM of eight timeouts, longer than the job's own
       # limit. Restarting all of them first makes it the slowest chain
       # instead. Dependency order still matters for restart (the switch and
       # the SOAP gateway first) but not for waiting: Kubernetes retries
@@ -295,7 +316,7 @@ jobs:
       # Polls explicitly instead of using `oc rollout status`.
       #
       # `oc rollout status` hung indefinitely on "Waiting for deployment spec
-      # update to be observed" -- its --timeout applies to the watch, and a
+      # update to be observed", its --timeout applies to the watch, and a
       # watch that stops delivering events never fires it. This loop has a
       # hard wall-clock deadline it cannot miss, because it re-reads state
       # every five seconds rather than waiting to be told.
@@ -316,7 +337,7 @@ jobs:
             STILL=""
             for svc in $PENDING; do
               # jsonpath returns an empty string for absent fields, so every
-              # read is defaulted -- an unset readyReplicas is 0, not a
+              # read is defaulted, an unset readyReplicas is 0, not a
               # syntax error in the arithmetic below.
               gen=$(oc get deploy "$svc" -o jsonpath='{.metadata.generation}' 2>/dev/null || echo 0)
               obs=$(oc get deploy "$svc" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || echo -1)
@@ -355,8 +376,8 @@ jobs:
           echo "all deployments rolled out"
 
       # From the runner against the public Route, not via `oc exec` into a
-      # pod. Simpler, and it exercises the same path a real client takes --
-      # through the Route and the router -- instead of requiring a pod to
+      # pod. Simpler, and it exercises the same path a real client takes,
+      # through the Route and the router, instead of requiring a pod to
       # reach its own external hostname.
       - name: Smoke test
         run: |

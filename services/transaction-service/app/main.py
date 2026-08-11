@@ -1,5 +1,5 @@
 """
-transaction-service -- the saga orchestrator.
+transaction-service, the saga orchestrator.
 
 In the monolith, a purchase was one function calling risk, then security,
 then the switch, then the ledger, inside a single process. If anything threw,
@@ -16,7 +16,7 @@ reversible first:
 
   1. resolve + authorize ownership  (read-only, free to abandon)
   2. risk evaluation                (has a side effect on velocity, but no money)
-  3. ISO 8583 authorization         (MOVES MONEY at the switch -- the point of no return)
+  3. ISO 8583 authorization         (MOVES MONEY at the switch, the point of no return)
   4. ledger posting                 (records what step 3 did)
 
 Everything reversible happens before the irreversible step. Only step 4
@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI):
     app.state.ledger = ServiceClient("ledger-service", LEDGER_URL, timeout=5.0)
     # The adapter's timeout must EXCEED the switch timeout it wraps,
     # otherwise this service gives up first and reports "unknown" for
-    # transactions the adapter was about to resolve cleanly -- manufacturing
+    # transactions the adapter was about to resolve cleanly, manufacturing
     # ambiguity that did not exist.
     app.state.adapter = ServiceClient("iso8583-adapter", ADAPTER_URL, timeout=30.0)
     yield
@@ -115,7 +115,7 @@ class TransactionResponse(BaseModel):
     authorization_id: str | None = None
     ledger_status: str | None = None
     # Set when the switch outcome could not be determined. A client seeing
-    # this must NOT retry blindly -- the original may have succeeded.
+    # this must NOT retry blindly, the original may have succeeded.
     requires_reconciliation: bool = False
 
 
@@ -123,7 +123,7 @@ def _generate_rrn() -> str:
     """
     12 characters: 10 digits of epoch seconds plus 2 random.
 
-    Collision risk is real but bounded -- two transactions in the same second
+    Collision risk is real but bounded, two transactions in the same second
     have a 1-in-100 chance of colliding, and the ledger's PRIMARY KEY turns a
     collision into a rejected duplicate rather than corrupted money. Ported
     unchanged from the monolith deliberately, with the flaw documented rather
@@ -141,7 +141,7 @@ def _generate_rrn() -> str:
 def purchase(body: PurchaseRequest, request: Request):
     state = request.app.state
 
-    # -- Step 1: resolve both sides, and prove the caller owns the debit side.
+    #, Step 1: resolve both sides, and prove the caller owns the debit side.
     # Read-only. Failing here costs nothing and touches no money.
     sender = _resolve_or_404(state, body.card_number, "Sender card is not registered.")
     merchant = _resolve_or_404(state, MERCHANT_IDENTIFIER, f"Merchant '{MERCHANT_IDENTIFIER}' is not registered.")
@@ -152,7 +152,7 @@ def purchase(body: PurchaseRequest, request: Request):
         # any card whose number the holder happened to know.
         raise HTTPException(status_code=403, detail="You are not authorized to use this card.")
 
-    # -- Step 2: risk. Never retried: evaluating records an attempt, so a
+    #, Step 2: risk. Never retried: evaluating records an attempt, so a
     # retry inflates the caller's own velocity toward a decline.
     try:
         decision = state.risk.post(
@@ -166,7 +166,7 @@ def purchase(body: PurchaseRequest, request: Request):
         )
     except ServiceCallError as exc:
         # Fail CLOSED. A risk service that is down must not become a risk
-        # service that approves everything -- that turns an outage into an
+        # service that approves everything, that turns an outage into an
         # open fraud window.
         log.error(f"risk-service unavailable, failing closed: {exc}")
         raise HTTPException(status_code=503, detail="Risk evaluation unavailable; transaction refused.")
@@ -176,7 +176,7 @@ def purchase(body: PurchaseRequest, request: Request):
         log.warning(f"risk {decision['outcome']} card={mask_pan(body.card_number)}: {reason}")
         return TransactionResponse(status=decision["outcome"], reason=reason)
 
-    # -- Step 3: authorize at the switch. THE POINT OF NO RETURN.
+    #, Step 3: authorize at the switch. THE POINT OF NO RETURN.
     rrn = _generate_rrn()
     auth = _authorize(
         state,
@@ -193,7 +193,7 @@ def purchase(body: PurchaseRequest, request: Request):
         # posting for a transaction that never happened is worse than a
         # missing posting for one that did, because the second is caught by
         # daily reconciliation and the first silently invents money.
-        log.error(f"UNKNOWN outcome rrn={rrn} -- no ledger posting, reconciliation required")
+        log.error(f"UNKNOWN outcome rrn={rrn}, no ledger posting, reconciliation required")
         return TransactionResponse(
             status="unknown",
             reason=auth.get("response_text") or "Switch outcome could not be determined.",
@@ -209,7 +209,7 @@ def purchase(body: PurchaseRequest, request: Request):
             stan=auth.get("stan"),
         )
 
-    # -- Step 4: record it. Idempotent on RRN, so retries are safe.
+    #, Step 4: record it. Idempotent on RRN, so retries are safe.
     confirmed_rrn = auth.get("rrn") or rrn
     ledger_status = _post_to_ledger(
         state,
@@ -342,7 +342,7 @@ def _authorize(state, **kwargs) -> dict:
     try:
         # retries=0, emphatically. This is the step that moves money. An
         # automatic retry of an authorization whose response was merely lost
-        # is a second, real authorization -- the cardholder is debited twice
+        # is a second, real authorization, the cardholder is debited twice
         # and only one is ever recorded.
         return state.adapter.post("/internal/iso8583/authorize", payload, retries=0)
     except ServiceRejectedError as exc:
@@ -362,7 +362,7 @@ def _post_to_ledger(state, *, rrn, debit, credit, amount_cents, kind, card_numbe
     """
     Step 4, plus its compensation.
 
-    Retried, because the posting is idempotent on RRN -- a retry after a lost
+    Retried, because the posting is idempotent on RRN, a retry after a lost
     response finds the row already there and reports "already_recorded"
     rather than double-posting. This is the payoff for the PRIMARY KEY.
     """

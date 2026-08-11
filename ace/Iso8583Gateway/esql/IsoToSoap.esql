@@ -1,5 +1,5 @@
 /*
- * IsoToSoap.esql -- maps the ISO 8583 response the switch returned onto the
+ * IsoToSoap.esql, maps the ISO 8583 response the switch returned onto the
  * SOAP response the caller receives.
  *
  * The return half of the mediation:
@@ -87,7 +87,7 @@ CREATE COMPUTE MODULE IsoToSoap
      * needs its own copy of the code table.
      *
      * Only the codes this platform actually encounters are listed. An
-     * unmapped code returns a descriptive string rather than NULL -- a
+     * unmapped code returns a descriptive string rather than NULL, a
      * decline with no stated reason is a support ticket, and "Unmapped
      * response code 'XY'" at least tells the reader what to go and look up.
      */
@@ -129,7 +129,7 @@ END MODULE;
  * when the switch accepted our 0200 and never answered.
  *
  * THIS IS THE MOST IMPORTANT ERROR PATH IN THE PLATFORM. The transaction may
- * have been authorized and the cardholder already debited -- only the
+ * have been authorized and the cardholder already debited, only the
  * response was lost. So two things happen, in this order:
  *
  *   1. an 0400 reversal is emitted, to undo whatever may have happened
@@ -150,7 +150,7 @@ CREATE COMPUTE MODULE HandleSwitchTimeout
 
         SET OutputRoot.SOAP.Body.soapNs:Fault.faultcode   = 'soapenv:Server';
         SET OutputRoot.SOAP.Body.soapNs:Fault.faultstring =
-            'Switch did not respond within the configured timeout -- outcome UNKNOWN, reversal sent';
+            'Switch did not respond within the configured timeout, outcome UNKNOWN, reversal sent';
         SET OutputRoot.SOAP.Body.soapNs:Fault.detail      = 'category=SWITCH_TIMEOUT';
 
         RETURN TRUE;

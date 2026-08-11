@@ -1,6 +1,6 @@
 ---
 # transaction-service
-# The saga orchestrator. Stateless -- all saga state is in the request,
+# The saga orchestrator. Stateless, all saga state is in the request,
     # so a pod dying mid-saga loses that transaction but corrupts nothing.
 apiVersion: apps/v1
 kind: Deployment
@@ -75,7 +75,7 @@ spec:
               mountPath: /tmp
 
           # LIVENESS hits /health, which checks only that this process is
-          # responsive. It must NOT check downstreams -- a liveness probe that
+          # responsive. It must NOT check downstreams, a liveness probe that
           # fails during a dependency outage makes OpenShift restart healthy
           # pods, losing in-flight work and fixing nothing.
           livenessProbe:

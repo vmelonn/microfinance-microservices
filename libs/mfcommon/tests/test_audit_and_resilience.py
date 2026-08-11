@@ -58,7 +58,7 @@ def test_track_data_is_masked_because_it_contains_the_full_pan():
 
 
 def test_json_payload_masking_covers_the_rest_hops():
-    """Between services the same secrets travel as JSON, not ISO 8583 -- and
+    """Between services the same secrets travel as JSON, not ISO 8583, and
     are just as easy to log by accident."""
     payload = {
         "card_number": "4532015112830366",
@@ -85,7 +85,7 @@ def test_breaker_opens_only_after_the_threshold():
 
     breaker.record_failure()
     breaker.record_failure()
-    assert breaker.is_open is False, "opened early -- one blip would stop all traffic"
+    assert breaker.is_open is False, "opened early, one blip would stop all traffic"
 
     breaker.record_failure()
     assert breaker.is_open is True

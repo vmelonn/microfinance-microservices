@@ -1,9 +1,9 @@
-﻿"""
+"""
 Key management service, following the same swappable-interface pattern as
 cache/idempotency_store.py and cache/velocity_tracker.py: one interface,
 one fully real and tested implementation, one cloud implementation this
 sandbox genuinely cannot reach (no network access to AWS/GCP's control
-plane here -- the code is correct and matches boto3's real API shape, but
+plane here, the code is correct and matches boto3's real API shape, but
 untestable without real credentials).
 
 The core operation both real cloud KMS services (AWS KMS, Google Cloud
@@ -19,7 +19,7 @@ KMS) and this local version expose is envelope encryption:
       Asks the KMS to unwrap a previously-encrypted key back to plaintext.
 
 This is the standard pattern real systems use to protect a long-lived
-root/master key -- exactly the problem MockHSM's base_key had: it was
+root/master key, exactly the problem MockHSM's base_key had: it was
 just os.urandom(), regenerated fresh every process start, meaning
 anything encrypted before a restart became permanently undecryptable.
 """
@@ -29,7 +29,7 @@ from abc import ABC, abstractmethod
 
 # NOTE: `cryptography` is imported lazily inside LocalKeyManagementService,
 # not at module scope, for the same reason boto3 is deferred inside
-# AWSKeyManagementService below -- mfcommon is a shared library imported by
+# AWSKeyManagementService below, mfcommon is a shared library imported by
 # all seven services, and only iso8583-adapter ever touches key material.
 # A module-level import here would make every service in the platform
 # install and load a crypto library it never calls.
@@ -49,7 +49,7 @@ class KeyManagementService(ABC):
 
 class LocalKeyManagementService(KeyManagementService):
     """
-    A real KMS, running locally -- genuine AES-256-GCM authenticated
+    A real KMS, running locally, genuine AES-256-GCM authenticated
     encryption, not the mock XOR the rest of this project's HSM uses
     elsewhere. The master key here is the one thing a real cloud KMS would
     keep in actual tamper-resistant hardware; here it's just a key loaded
@@ -75,7 +75,7 @@ class LocalKeyManagementService(KeyManagementService):
     def _wrap(self, plaintext_dek: bytes, key_id: str) -> bytes:
         aesgcm = self._aesgcm_cls(self._master_key)
         nonce = os.urandom(12)  # AES-GCM's standard nonce size
-        # key_id is bound in as "associated data" -- authenticated but not
+        # key_id is bound in as "associated data", authenticated but not
         # encrypted, meaning a wrapped key can't be silently swapped to
         # answer for a DIFFERENT key_id than the one it was created under.
         ciphertext = aesgcm.encrypt(nonce, plaintext_dek, key_id.encode("utf-8"))
@@ -89,7 +89,7 @@ class LocalKeyManagementService(KeyManagementService):
 
 class AWSKeyManagementService(KeyManagementService):
     """
-    Real AWS KMS integration -- correct API shape, genuinely untestable in
+    Real AWS KMS integration, correct API shape, genuinely untestable in
     this environment (no network route to AWS's control plane here, and
     no credentials configured). Activate this by setting AWS credentials
     normally (environment variables, an IAM role, or ~/.aws/credentials)

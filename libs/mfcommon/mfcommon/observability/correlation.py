@@ -1,5 +1,5 @@
 """
-Correlation IDs -- the thing a monolith never needed and a microservice
+Correlation IDs, the thing a monolith never needed and a microservice
 platform cannot function without.
 
 In the monolith, one purchase was one Python call stack. A traceback told
@@ -28,7 +28,7 @@ for money that moved and must still be findable in seven years.
 
 NOTE ON contextvars: request_id_var is a ContextVar, not a global or a
 thread-local. FastAPI runs handlers on an asyncio event loop where many
-requests share one thread -- a threading.local() here would leak one
+requests share one thread, a threading.local() here would leak one
 request's ID into another's logs, intermittently, under load. That is a
 genuinely nasty bug class, and ContextVar is the thing that prevents it.
 """
@@ -68,7 +68,7 @@ def outbound_headers(extra: dict | None = None) -> dict:
 
 class CorrelationIdFilter(logging.Filter):
     """Injects the current correlation ID into every log record, so handlers
-    never have to remember to include it -- one forgotten log line is one
+    never have to remember to include it, one forgotten log line is one
     invisible step in a trace."""
 
     def filter(self, record: logging.LogRecord) -> bool:

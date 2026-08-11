@@ -1,19 +1,19 @@
 """
-A minimal JWT implementation -- HS256 only, no external dependency.
+A minimal JWT implementation, HS256 only, no external dependency.
 
 A JWT is three base64url-encoded, dot-separated parts:
     header.payload.signature
 
 The header and payload are just JSON; the signature is an HMAC-SHA256 over
 the literal string "header.payload", using a secret only the server knows.
-Anyone can read a JWT's contents (it's not encrypted, just encoded) --
+Anyone can read a JWT's contents (it's not encrypted, just encoded),
 what the signature protects against is *tampering*: change one byte of
 the payload and the signature no longer matches, so decode_token() below
 will reject it.
 
 This is deliberately a small, from-scratch implementation, consistent
 with the rest of this project's approach to primitives (BCD packing, PIN
-blocks, the mock HSM) -- understanding exactly what's inside the token
+blocks, the mock HSM), understanding exactly what's inside the token
 matters more here than the convenience of a library.
 """
 
@@ -66,14 +66,14 @@ def decode_token(token: str, secret: str) -> dict:
     try:
         header_b64, payload_b64, signature_b64 = token.split(".")
     except ValueError:
-        raise TokenError("Malformed token -- expected header.payload.signature")
+        raise TokenError("Malformed token, expected header.payload.signature")
 
     signing_input = f"{header_b64}.{payload_b64}"
     expected_signature = _sign(signing_input, secret)
 
-    # constant-time comparison -- same reasoning as password verification
+    # constant-time comparison, same reasoning as password verification
     if not hmac.compare_digest(expected_signature, signature_b64):
-        raise TokenError("Signature does not match -- token is invalid or was tampered with")
+        raise TokenError("Signature does not match, token is invalid or was tampered with")
 
     try:
         payload = json.loads(_b64url_decode(payload_b64))

@@ -13,7 +13,7 @@
 # --local: uploads YOUR WORKING TREE instead and builds that, ignoring Git for
 # this run. Useful while iterating on something uncommitted. The resulting
 # image corresponds to no commit, so never use it for anything you need to
-# reproduce -- and note it will happily ship your uncommitted debugging.
+# reproduce, and note it will happily ship your uncommitted debugging.
 #
 # Requires: oc, and an active login. Does NOT require a local container engine.
 
@@ -65,7 +65,7 @@ if [ ${#TARGETS[@]} -eq 0 ]; then
 fi
 
 if [ "$FROM_LOCAL" -eq 1 ]; then
-  echo "source:    LOCAL WORKING TREE (not Git -- these images match no commit)"
+  echo "source:    LOCAL WORKING TREE (not Git, these images match no commit)"
   if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
     echo "           note: you have uncommitted changes, and they WILL be built"
   fi
@@ -80,7 +80,7 @@ for svc in "${TARGETS[@]}"; do
   # than after a silent wait. --wait makes a failed build fail this script,
   # which is what stops a deploy from rolling out a stale image.
   if [ "$FROM_LOCAL" -eq 1 ]; then
-    # .dockerignore keeps this upload small -- without it the whole .git
+    # .dockerignore keeps this upload small, without it the whole .git
     # directory and the local venv would go over the network every build.
     oc start-build "${svc}" --from-dir=. --follow --wait
   else

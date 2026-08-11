@@ -1,4 +1,4 @@
-# Dev overlay -- small, chatty, and deliberately destructible.
+# Dev overlay, small, chatty, and deliberately destructible.
 #
 #     oc apply -k openshift/overlays/dev
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -53,7 +53,7 @@ patches:
   # environment, so MockHSM tried to write into a directory that no longer
   # existed and died with FileNotFoundError at startup. That is what made
   # `oc set volume deployment/iso8583-adapter --add --type=emptyDir` necessary
-  # by hand after every deploy -- and that imperative patch was silently
+  # by hand after every deploy, and that imperative patch was silently
   # reverted by the next `oc apply -k`.
   #
   # An emptyDir keeps the path valid and still gives the intended behaviour:
@@ -68,7 +68,7 @@ patches:
           emptyDir: {}
 
   # minAvailable: 1 against a single replica means a node drain can NEVER
-  # evict this pod -- the budget is unsatisfiable, so the drain blocks
+  # evict this pod, the budget is unsatisfiable, so the drain blocks
   # indefinitely. Dev runs one replica, so the budget has to allow zero.
   - target: {kind: PodDisruptionBudget, name: api-gateway}
     patch: |-

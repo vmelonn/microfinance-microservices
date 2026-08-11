@@ -1,22 +1,22 @@
 """
-Audit masking -- ported from the monolith's ops/audit_log.py, with one
+Audit masking, ported from the monolith's ops/audit_log.py, with one
 change that the decomposition forces.
 
 In the monolith, exactly one place logged ISO 8583 messages: switch/client.py.
 Masking there covered everything, because nothing else ever saw a raw
-message. Across seven services that assumption is gone -- iso8583-adapter,
+message. Across seven services that assumption is gone, iso8583-adapter,
 ace-stub, and (once entitled) ACE itself all handle messages containing
 DE 52, and any of the three logging carelessly writes a PIN block to a log
 aggregator that probably retains it for a year.
 
 So the masking rules live here, in shared code, and every service that
-touches a message imports them. The rule is not "remember to mask" -- it is
+touches a message imports them. The rule is not "remember to mask", it is
 "there is one function, and it is the only way messages get logged."
 
 NEVER_LOG vs MASK_LAST4 is a real distinction, not defensive
 over-engineering: a PAN's last four digits are printed on receipts and are
 genuinely needed to answer support questions, so truncation preserves
-utility. A PIN block has no safe fragment -- eight bytes is the entire
+utility. A PIN block has no safe fragment, eight bytes is the entire
 secret, and any part of it is a head start on the rest.
 """
 
@@ -27,7 +27,7 @@ from __future__ import annotations
 # any of these is safe to retain.
 NEVER_LOG = {52, 53, 55, 64, 96, 128}
 
-# Truncated to the last four digits -- still useful for support, useless to
+# Truncated to the last four digits, still useful for support, useless to
 # an attacker.
 MASK_LAST4 = {2, 34, 35, 45}  # PAN, extended PAN, track 2, track 1
 

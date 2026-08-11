@@ -1,5 +1,5 @@
 """
-ace-stub -- a SOAP/ISO 8583 gateway that stands in for IBM ACE.
+ace-stub, a SOAP/ISO 8583 gateway that stands in for IBM ACE.
 
 Serves ace/Iso8583Library/wsdl/Iso8583Gateway.wsdl verbatim, accepts the
 same envelopes, holds a real TCP connection to the switch, and speaks real
@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
 
     # Fail fast and loudly. A gateway that starts "successfully" without a
     # switch connection passes its startup probe and then rejects every
-    # transaction -- far worse than refusing to start, because OpenShift
+    # transaction, far worse than refusing to start, because OpenShift
     # will not roll it back.
     deadline = time.monotonic() + CONNECT_TIMEOUT
     while not client._connected.is_set():
@@ -102,7 +102,7 @@ app = FastAPI(title="ISO 8583 SOAP Gateway (ACE stand-in)", lifespan=lifespan)
 def serve_wsdl(wsdl: str | None = None):
     """
     ?wsdl returns the contract. Real ACE exposes the same thing at the same
-    path, so tooling pointed at either gets an identical document -- which
+    path, so tooling pointed at either gets an identical document, which
     is exactly the property that makes the swap safe.
     """
     if wsdl is None:
@@ -177,7 +177,7 @@ async def soap_endpoint(request: Request):
         parsed = correlator.send_and_wait(mti, de_fields)
     except TransactionTimeout as exc:
         # The critical path. A reversal has ALREADY been sent by the
-        # correlation manager, but the business outcome is still unknown --
+        # correlation manager, but the business outcome is still unknown,
         # the switch may have approved before going quiet. The caller is
         # told this explicitly via the SWITCH_TIMEOUT category so it can
         # avoid recording a ledger posting for a transaction it cannot
@@ -185,7 +185,7 @@ async def soap_endpoint(request: Request):
         log.error(f"switch timeout on {operation}: {exc}")
         return _fault(
             "soapenv:Server",
-            f"Switch did not respond within {SWITCH_TIMEOUT}s -- outcome UNKNOWN, reversal sent",
+            f"Switch did not respond within {SWITCH_TIMEOUT}s, outcome UNKNOWN, reversal sent",
             504,
             detail="category=SWITCH_TIMEOUT",
         )
@@ -217,7 +217,7 @@ async def soap_endpoint(request: Request):
 @app.get("/health")
 def health():
     """Liveness: is this process alive? Deliberately does NOT check the
-    switch -- a liveness probe that fails on a downstream outage makes
+    switch, a liveness probe that fails on a downstream outage makes
     OpenShift restart a healthy pod, which fixes nothing and loses the
     in-flight requests."""
     return {"status": "ok", "service": "ace-stub"}
@@ -226,7 +226,7 @@ def health():
 @app.get("/ready")
 def ready(request: Request):
     """Readiness: should this pod receive traffic? Here the switch
-    connection genuinely is the answer -- without it every request fails,
+    connection genuinely is the answer, without it every request fails,
     so the pod should be taken out of the Service's endpoint list."""
     connected = request.app.state.client._connected.is_set()
     return Response(

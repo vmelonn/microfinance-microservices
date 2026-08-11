@@ -7,12 +7,12 @@ same binary wire format in this repository:
     libs/mfcommon/mfcommon/iso8583/parser.py      (Python, runs today)
     ace/Iso8583Library/dfdl/ISO8583.xsd           (DFDL, runs once entitled)
 
-Two implementations of a binary format WILL drift. Not might -- will. Someone
+Two implementations of a binary format WILL drift. Not might, will. Someone
 adjusts BCD padding in one and not the other, and messages that look fine in
 testing corrupt in production, in a way that manifests as the switch closing
 the connection with no explanation.
 
-WHAT THIS FILE ACTUALLY DOES. It cannot execute the DFDL schema -- that needs
+WHAT THIS FILE ACTUALLY DOES. It cannot execute the DFDL schema, that needs
 an ACE runtime, which needs an entitlement key. What it CAN do is assert the
 exact byte-level properties the DFDL schema declares, against the Python
 implementation. Every assertion below corresponds to a specific declaration
@@ -42,7 +42,7 @@ from mfcommon.iso8583.parser import (
 
 
 # ---------------------------------------------------------------------------
-# MTI -- xsd:string, dfdl:length="2", binaryNumberRep="bcd"
+# MTI, xsd:string, dfdl:length="2", binaryNumberRep="bcd"
 # ---------------------------------------------------------------------------
 
 def test_mti_is_two_bytes_bcd():
@@ -55,7 +55,7 @@ def test_mti_is_two_bytes_bcd():
 
 
 # ---------------------------------------------------------------------------
-# Bitmap -- 64 one-bit elements, dfdl:lengthUnits="bits"
+# Bitmap, 64 one-bit elements, dfdl:lengthUnits="bits"
 # ---------------------------------------------------------------------------
 
 def test_primary_bitmap_is_eight_bytes_when_no_field_exceeds_64():
@@ -97,7 +97,7 @@ def test_de1_is_reserved_and_rejected_as_a_data_field():
 
 
 # ---------------------------------------------------------------------------
-# BCD -- the odd-length filler rule
+# BCD, the odd-length filler rule
 # ---------------------------------------------------------------------------
 
 def test_bcd_packs_two_digits_per_byte():
@@ -123,7 +123,7 @@ def test_odd_length_numerics_get_a_TRAILING_f_nibble():
 
 
 def test_de22_occupies_two_bytes_as_declared():
-    """ISO8583.xsd sets DE022_EntryMode to dfdl:length="2" -- 3 digits
+    """ISO8583.xsd sets DE022_EntryMode to dfdl:length="2", 3 digits
     rounded up through the filler nibble."""
     assert FIELD_SPECS[22].length == 3
     assert FIELD_SPECS[22].numeric is True
@@ -132,7 +132,7 @@ def test_de22_occupies_two_bytes_as_declared():
 
 
 # ---------------------------------------------------------------------------
-# LLVAR -- the digits-vs-bytes trap
+# LLVAR, the digits-vs-bytes trap
 # ---------------------------------------------------------------------------
 
 def test_llvar_length_prefix_counts_DIGITS_not_bytes():
@@ -194,7 +194,7 @@ def test_pin_block_ending_in_whitespace_bytes_is_not_trimmed():
 
     An encrypted PIN block is 8 bytes of ciphertext. It can coincidentally
     end in 0x20 (space) or another byte that decodes to whitespace. Trimming
-    it -- correct for a space-padded text field like DE 43 -- silently
+    it, correct for a space-padded text field like DE 43, silently
     destroys real key material here, and the switch then derives the wrong
     PIN and declines with DE 39 = 55.
 
@@ -216,7 +216,7 @@ def test_pin_block_ending_in_whitespace_bytes_is_not_trimmed():
 def test_text_fields_ARE_trimmed_because_that_padding_is_not_data():
     """The other half of the rule. DE 43 is genuinely space-padded to 40
     characters, and ISO8583.xsd sets textTrimKind="padChar" for it. Trimming
-    here is correct -- the distinction between the two cases is the whole
+    here is correct, the distinction between the two cases is the whole
     point."""
     raw = build_message("0200", {43: "CORNER SHOP LAHORE"})
     parsed, _ = parse_message(raw)
@@ -230,7 +230,7 @@ def test_text_fields_ARE_trimmed_because_that_padding_is_not_data():
 
 def test_rrn_is_text_not_bcd():
     """ISO8583.xsd declares DE037_RRN as representation="text",
-    dfdl:length="12" -- 12 CHARACTERS occupying 12 bytes. Treating it as BCD
+    dfdl:length="12", 12 CHARACTERS occupying 12 bytes. Treating it as BCD
     would pack it into 6 and shift everything after it."""
     assert FIELD_SPECS[37].numeric is False
     raw = build_message("0200", {37: "000123456789"})
@@ -252,7 +252,7 @@ def test_amount_is_bcd_and_exactly_six_bytes():
 
 
 # ---------------------------------------------------------------------------
-# Field ordering -- position IS identity
+# Field ordering, position IS identity
 # ---------------------------------------------------------------------------
 
 def test_fields_are_emitted_in_ascending_de_order():
@@ -296,7 +296,7 @@ def test_full_authorization_message_round_trips():
 
 
 # ---------------------------------------------------------------------------
-# MLI framing -- ISO8583Framed in the DFDL schema
+# MLI framing, ISO8583Framed in the DFDL schema
 # ---------------------------------------------------------------------------
 
 def test_mli_is_two_bytes_big_endian():

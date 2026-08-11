@@ -1,5 +1,5 @@
 /*
- * SoapToIso.esql -- maps an inbound SOAP request onto the ISO 8583 logical
+ * SoapToIso.esql, maps an inbound SOAP request onto the ISO 8583 logical
  * tree that the DFDL serializer turns into wire bytes.
  *
  * This is the ACE implementation of the mapping written in Python in
@@ -11,7 +11,7 @@
  *
  * The output message domain is DFDL, referencing the ISO8583Message element
  * in Iso8583Library/dfdl/ISO8583.xsd. Setting the Properties correctly is
- * what tells ACE to serialize rather than to emit XML -- getting it wrong
+ * what tells ACE to serialize rather than to emit XML, getting it wrong
  * produces an XML document on the socket and a switch that closes the
  * connection without explanation.
  */
@@ -51,12 +51,12 @@ CREATE COMPUTE MODULE SoapToIso
     END;
 
     /*
-     * MTI 0200 -- financial authorization request.
+     * MTI 0200, financial authorization request.
      *
      * DE 11 (STAN) is assigned HERE, from a shared counter, not taken from
      * the caller. STAN must be unique per CONNECTION, and only the component
      * that owns the connection can guarantee that. Two in-flight requests
-     * sharing a STAN would each receive the other's response -- the worst
+     * sharing a STAN would each receive the other's response, the worst
      * possible failure mode in a payment system.
      */
     CREATE PROCEDURE BuildAuthorization(IN body REFERENCE, IN isoNs NAMESPACE, IN soapNs NAMESPACE)
@@ -114,7 +114,7 @@ CREATE COMPUTE MODULE SoapToIso
     END;
 
     /*
-     * MTI 0400 -- reversal.
+     * MTI 0400, reversal.
      *
      * DE 90 (original data elements) is what ties the reversal to the
      * transaction being reversed. Without it the switch cannot identify the
@@ -153,7 +153,7 @@ CREATE COMPUTE MODULE SoapToIso
            || '00000000000';
     END;
 
-    /* MTI 0800 -- sign-on (001), sign-off (002), echo test (301). */
+    /* MTI 0800, sign-on (001), sign-off (002), echo test (301). */
     CREATE PROCEDURE BuildNetworkManagement(IN body REFERENCE, IN isoNs NAMESPACE, IN soapNs NAMESPACE)
     BEGIN
         DECLARE req REFERENCE TO body.soapNs:networkManagementRequest;
@@ -170,7 +170,7 @@ CREATE COMPUTE MODULE SoapToIso
      * STAN allocation.
      *
      * SHARED variable, so the counter is per-integration-server rather than
-     * per-message-thread -- a per-thread counter would hand the same STAN to
+     * per-message-thread, a per-thread counter would hand the same STAN to
      * concurrent transactions. The ATOMIC block is what makes
      * read-increment-write indivisible across threads; without it two
      * threads can read the same value before either writes.
@@ -178,7 +178,7 @@ CREATE COMPUTE MODULE SoapToIso
      * SCALING CAVEAT: this counter is per integration server. Running more
      * than one ACE replica against ONE switch connection pool would need
      * either a shared counter or a per-replica STAN range. With one replica
-     * holding one connection -- the deployment here -- it is correct.
+     * holding one connection, the deployment here, it is correct.
      */
     CREATE PROCEDURE NextStan() RETURNS CHARACTER
     BEGIN

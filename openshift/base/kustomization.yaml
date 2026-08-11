@@ -1,6 +1,6 @@
 # Base layer: the full platform, environment-agnostic.
 #
-# Never applied directly -- apply an overlay:
+# Never applied directly, apply an overlay:
 #     oc apply -k openshift/overlays/dev
 #     oc apply -k openshift/overlays/prod
 #

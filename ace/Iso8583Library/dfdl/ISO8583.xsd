@@ -27,7 +27,7 @@
   covering DE 65-128.
 
   DFDL 1.0 has no bitwise operators, so you cannot mask a byte to test a bit.
-  The idiomatic solution -- and the one IBM's own ISO 8583 samples use -- is
+  The idiomatic solution - and the one IBM's own ISO 8583 samples use - is
   to model the bitmap as sixty-four SEPARATE ONE-BIT ELEMENTS via
   dfdl:lengthUnits="bits" and dfdl:length="1". Each then holds 0 or 1
   directly, and a field's presence becomes:
@@ -35,8 +35,8 @@
       dfdl:occursCountKind="expression"
       dfdl:occursCount="{ ../PrimaryBitmap/Bit2 }"
 
-  which is readable and needs no arithmetic. It is verbose -- 64 declarations
-  for something a single byte-mask would express in C -- but it is correct,
+  which is readable and needs no arithmetic. It is verbose - 64 declarations
+  for something a single byte-mask would express in C - but it is correct,
   and DFDL's verbosity here buys a schema that ACE can both parse AND
   serialize from, which hand-written ESQL could not.
 
@@ -45,7 +45,7 @@
   ============================================================
   Numeric fields are packed two decimal digits per byte (binaryNumberRep
   "bcd"). An odd-length numeric value gets a trailing 'F' nibble as filler.
-  That choice is VENDOR-SPECIFIC -- some processors pad leading instead --
+  That choice is VENDOR-SPECIFIC - some processors pad leading instead -
   and it is documented in parser.py's bcd_encode(). Both sides must agree or
   every odd-length field shifts by one nibble and the rest of the message
   is garbage.
@@ -118,7 +118,7 @@
                     dfdl:representation="binary" dfdl:binaryNumberRep="bcd"/>
 
         <!-- Primary bitmap: DE 1-64, one element per bit.
-             Bit1 is NOT a data element -- it is the "secondary bitmap
+             Bit1 is NOT a data element - it is the "secondary bitmap
              follows" flag, which is why there is no DE 1 below. -->
         <xs:element name="PrimaryBitmap" dfdl:lengthKind="implicit">
           <xs:complexType>
@@ -192,7 +192,7 @@
         </xs:element>
 
         <!-- Secondary bitmap: DE 65-128. Present only when Bit1 is set.
-             occursCount reads Bit1 directly -- 1 occurrence or 0. -->
+             occursCount reads Bit1 directly - 1 occurrence or 0. -->
         <xs:element name="SecondaryBitmap" minOccurs="0" maxOccurs="1"
                     dfdl:lengthKind="implicit"
                     dfdl:occursCountKind="expression"
@@ -218,7 +218,7 @@
 
         <!-- DE 2, PAN. LLVAR: a 1-byte BCD length prefix (2 digits) giving
              the DIGIT count, then that many digits packed BCD.
-             Note the length is in DIGITS, not bytes -- 16 digits occupy 8
+             Note the length is in DIGITS, not bytes - 16 digits occupy 8
              bytes. Getting this wrong is the single most common ISO 8583
              parsing bug. -->
         <xs:element name="DE002_PAN" minOccurs="0"
@@ -307,7 +307,7 @@
           </xs:complexType>
         </xs:element>
 
-        <!-- DE 37, RRN. FIXED 12 characters, ASCII TEXT not BCD -- the
+        <!-- DE 37, RRN. FIXED 12 characters, ASCII TEXT not BCD - the
              standard types it 'an' (alphanumeric), so 12 characters occupy
              12 bytes, not 6. -->
         <xs:element name="DE037_RRN" type="xs:string" minOccurs="0"
@@ -351,7 +351,7 @@
 
         <!-- DE 43, card acceptor name/location. 40 characters, space padded.
              This one is genuinely space-padded TEXT, so trimming is CORRECT
-             here -- unlike DE 52/64, below. -->
+             here - unlike DE 52/64, below. -->
         <xs:element name="DE043_CardAcceptor" type="xs:string" minOccurs="0"
                     dfdl:occursCountKind="expression"
                     dfdl:occursCount="{ ../iso:PrimaryBitmap/iso:Bit43 }"
@@ -390,7 +390,7 @@
              encrypted PIN block is 8 bytes of ciphertext that may
              coincidentally end in 0x20 or another byte that decodes to
              whitespace. Trimming it would silently remove real key material,
-             corrupting roughly one PIN block in every few hundred -- rare
+             corrupting roughly one PIN block in every few hundred - rare
              enough to survive testing and reach production.
 
              The Python codec carries a dedicated `binary` flag on FieldSpec
@@ -432,7 +432,7 @@
 
        ACE's TCPIPClientInput/Output nodes can handle this framing
        themselves, but modelling it here means the same schema can also
-       parse a captured raw socket dump -- which is what you will want the
+       parse a captured raw socket dump - which is what you will want the
        first time production behaves differently from the simulator.
   -->
   <xs:element name="ISO8583Framed" dfdl:lengthKind="implicit">

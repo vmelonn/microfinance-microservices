@@ -1,5 +1,5 @@
 """
-analytics-sync -- incremental load from ledger-service into ClickHouse.
+analytics-sync, incremental load from ledger-service into ClickHouse.
 
 Runs as an OpenShift CronJob, not as a long-lived service. It has no HTTP
 port, no readiness probe, and exits with a status code the scheduler keys
@@ -19,8 +19,8 @@ exists. The /internal/ledger/export endpoint is a contract; the table is not.
 
 WATERMARK DISCIPLINE. The watermark advances only after a batch has been
 confirmed loaded. On failure it stays put and the next run re-reads the same
-rows. Re-reading is safe for fact_transactions -- ReplacingMergeTree
-collapses the duplicates -- but NOT for the materialized view, which fires
+rows. Re-reading is safe for fact_transactions, ReplacingMergeTree
+collapses the duplicates, but NOT for the materialized view, which fires
 on insert and would double-count. So "advance only on success" is a
 correctness requirement here, not tidiness.
 """
@@ -76,7 +76,7 @@ def main() -> int:
     try:
         warehouse.ensure_schema()
         watermark = warehouse.get_watermark(FACT_TABLE)
-        log.info(f"watermark: {watermark or '(empty -- first run, full load)'}")
+        log.info(f"watermark: {watermark or '(empty, first run, full load)'}")
 
         total = 0
         while True:

@@ -1,4 +1,4 @@
-﻿# In-cluster image builds, from Git.
+# In-cluster image builds, from Git.
 #
 #     oc apply -f openshift/build/build.yaml
 #     bash scripts/openshift-build.sh
@@ -8,7 +8,7 @@
 #
 #   - every image is traceable to a commit; `oc describe build/<name>-3`
 #     names the exact SHA it came from
-#   - no local container engine, and no upload -- the cluster pulls
+#   - no local container engine, and no upload, the cluster pulls
 #   - a webhook can rebuild automatically on push (see the bottom of this file)
 #
 # BINARY OVERRIDE, when you need it. `oc start-build <svc> --from-dir=.`
@@ -22,7 +22,7 @@
 # `oc new-app <repo> --strategy=docker --context-dir=services/api-gateway`
 # is the obvious one-liner and it does NOT work here. --context-dir sets the
 # build context AND the Dockerfile location together, so the build would run
-# with services/api-gateway/ as its root -- and every Dockerfile in this repo
+# with services/api-gateway/ as its root, and every Dockerfile in this repo
 # needs the REPOSITORY ROOT as context, because each image installs
 # libs/mfcommon as a real package rather than reaching it through a sys.path
 # hack.
@@ -33,7 +33,7 @@
 # to review and re-apply than nine slightly different command lines.
 
 ---
-# api-gateway -- The only service with a Route.
+# api-gateway, The only service with a Route.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -44,7 +44,7 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and openshift/base/ carries the
+  # template, both halves are required, and openshift/base/ carries the
   # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
@@ -76,7 +76,7 @@ spec:
   triggers:
     # Rebuild when this BuildConfig itself changes.
     - type: ConfigChange
-    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub,
     # see the instructions at the bottom of this file.
     - type: GitHub
       github:
@@ -84,20 +84,20 @@ spec:
           name: github-webhook-secret
   # A stuck build FAILS instead of hanging forever.
   #
-  # Without this, a build pod that never gets scheduled -- because the
-  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Without this, a build pod that never gets scheduled, because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster, sits
   # Pending indefinitely, and `oc start-build --follow` waits for logs that
   # never arrive. That is how a CI job burns five hours and is then killed by
   # GitHub's own limit with nothing useful in the log.
   #
-  # The deadline covers time spent Pending, not just running -- which is
+  # The deadline covers time spent Pending, not just running, which is
   # exactly the case that needs catching.
   completionDeadlineSeconds: 900     # 15 minutes
 
   resources:
     # Sized DOWN deliberately. These are modest pip installs, and the previous
     # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
-    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # 18Gi of limits at once, more than a sandbox namespace is granted, so
     # the scheduler refused and every build hung.
     #
     # Not a floor to keep lowering: too little and the build is OOM-killed
@@ -109,13 +109,13 @@ spec:
       memory: 1Gi
   # Retention kept deliberately tight. At 3 successful + 5 failed across nine
   # BuildConfigs this retained up to 72 build pods, which buried the console's
-  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # pod list and bloated etcd for no benefit, the build logs that matter are
   # already captured in the CI job output.
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 2
 
 ---
-# auth-service -- Users and JWT issuance.
+# auth-service, Users and JWT issuance.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -126,7 +126,7 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and openshift/base/ carries the
+  # template, both halves are required, and openshift/base/ carries the
   # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
@@ -158,7 +158,7 @@ spec:
   triggers:
     # Rebuild when this BuildConfig itself changes.
     - type: ConfigChange
-    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub,
     # see the instructions at the bottom of this file.
     - type: GitHub
       github:
@@ -166,20 +166,20 @@ spec:
           name: github-webhook-secret
   # A stuck build FAILS instead of hanging forever.
   #
-  # Without this, a build pod that never gets scheduled -- because the
-  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Without this, a build pod that never gets scheduled, because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster, sits
   # Pending indefinitely, and `oc start-build --follow` waits for logs that
   # never arrive. That is how a CI job burns five hours and is then killed by
   # GitHub's own limit with nothing useful in the log.
   #
-  # The deadline covers time spent Pending, not just running -- which is
+  # The deadline covers time spent Pending, not just running, which is
   # exactly the case that needs catching.
   completionDeadlineSeconds: 900     # 15 minutes
 
   resources:
     # Sized DOWN deliberately. These are modest pip installs, and the previous
     # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
-    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # 18Gi of limits at once, more than a sandbox namespace is granted, so
     # the scheduler refused and every build hung.
     #
     # Not a floor to keep lowering: too little and the build is OOM-killed
@@ -191,13 +191,13 @@ spec:
       memory: 1Gi
   # Retention kept deliberately tight. At 3 successful + 5 failed across nine
   # BuildConfigs this retained up to 72 build pods, which buried the console's
-  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # pod list and bloated etcd for no benefit, the build logs that matter are
   # already captured in the CI job output.
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 2
 
 ---
-# transaction-service -- The saga orchestrator.
+# transaction-service, The saga orchestrator.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -208,7 +208,7 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and openshift/base/ carries the
+  # template, both halves are required, and openshift/base/ carries the
   # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
@@ -240,7 +240,7 @@ spec:
   triggers:
     # Rebuild when this BuildConfig itself changes.
     - type: ConfigChange
-    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub,
     # see the instructions at the bottom of this file.
     - type: GitHub
       github:
@@ -248,20 +248,20 @@ spec:
           name: github-webhook-secret
   # A stuck build FAILS instead of hanging forever.
   #
-  # Without this, a build pod that never gets scheduled -- because the
-  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Without this, a build pod that never gets scheduled, because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster, sits
   # Pending indefinitely, and `oc start-build --follow` waits for logs that
   # never arrive. That is how a CI job burns five hours and is then killed by
   # GitHub's own limit with nothing useful in the log.
   #
-  # The deadline covers time spent Pending, not just running -- which is
+  # The deadline covers time spent Pending, not just running, which is
   # exactly the case that needs catching.
   completionDeadlineSeconds: 900     # 15 minutes
 
   resources:
     # Sized DOWN deliberately. These are modest pip installs, and the previous
     # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
-    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # 18Gi of limits at once, more than a sandbox namespace is granted, so
     # the scheduler refused and every build hung.
     #
     # Not a floor to keep lowering: too little and the build is OOM-killed
@@ -273,13 +273,13 @@ spec:
       memory: 1Gi
   # Retention kept deliberately tight. At 3 successful + 5 failed across nine
   # BuildConfigs this retained up to 72 build pods, which buried the console's
-  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # pod list and bloated etcd for no benefit, the build logs that matter are
   # already captured in the CI job output.
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 2
 
 ---
-# risk-service -- Velocity and amount rules.
+# risk-service, Velocity and amount rules.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -290,7 +290,7 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and openshift/base/ carries the
+  # template, both halves are required, and openshift/base/ carries the
   # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
@@ -322,7 +322,7 @@ spec:
   triggers:
     # Rebuild when this BuildConfig itself changes.
     - type: ConfigChange
-    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub,
     # see the instructions at the bottom of this file.
     - type: GitHub
       github:
@@ -330,20 +330,20 @@ spec:
           name: github-webhook-secret
   # A stuck build FAILS instead of hanging forever.
   #
-  # Without this, a build pod that never gets scheduled -- because the
-  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Without this, a build pod that never gets scheduled, because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster, sits
   # Pending indefinitely, and `oc start-build --follow` waits for logs that
   # never arrive. That is how a CI job burns five hours and is then killed by
   # GitHub's own limit with nothing useful in the log.
   #
-  # The deadline covers time spent Pending, not just running -- which is
+  # The deadline covers time spent Pending, not just running, which is
   # exactly the case that needs catching.
   completionDeadlineSeconds: 900     # 15 minutes
 
   resources:
     # Sized DOWN deliberately. These are modest pip installs, and the previous
     # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
-    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # 18Gi of limits at once, more than a sandbox namespace is granted, so
     # the scheduler refused and every build hung.
     #
     # Not a floor to keep lowering: too little and the build is OOM-killed
@@ -355,13 +355,13 @@ spec:
       memory: 1Gi
   # Retention kept deliberately tight. At 3 successful + 5 failed across nine
   # BuildConfigs this retained up to 72 build pods, which buried the console's
-  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # pod list and bloated etcd for no benefit, the build logs that matter are
   # already captured in the CI job output.
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 2
 
 ---
-# ledger-service -- Double-entry postings.
+# ledger-service, Double-entry postings.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -372,7 +372,7 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and openshift/base/ carries the
+  # template, both halves are required, and openshift/base/ carries the
   # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
@@ -404,7 +404,7 @@ spec:
   triggers:
     # Rebuild when this BuildConfig itself changes.
     - type: ConfigChange
-    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub,
     # see the instructions at the bottom of this file.
     - type: GitHub
       github:
@@ -412,20 +412,20 @@ spec:
           name: github-webhook-secret
   # A stuck build FAILS instead of hanging forever.
   #
-  # Without this, a build pod that never gets scheduled -- because the
-  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Without this, a build pod that never gets scheduled, because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster, sits
   # Pending indefinitely, and `oc start-build --follow` waits for logs that
   # never arrive. That is how a CI job burns five hours and is then killed by
   # GitHub's own limit with nothing useful in the log.
   #
-  # The deadline covers time spent Pending, not just running -- which is
+  # The deadline covers time spent Pending, not just running, which is
   # exactly the case that needs catching.
   completionDeadlineSeconds: 900     # 15 minutes
 
   resources:
     # Sized DOWN deliberately. These are modest pip installs, and the previous
     # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
-    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # 18Gi of limits at once, more than a sandbox namespace is granted, so
     # the scheduler refused and every build hung.
     #
     # Not a floor to keep lowering: too little and the build is OOM-killed
@@ -437,13 +437,13 @@ spec:
       memory: 1Gi
   # Retention kept deliberately tight. At 3 successful + 5 failed across nine
   # BuildConfigs this retained up to 72 build pods, which buried the console's
-  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # pod list and bloated etcd for no benefit, the build logs that matter are
   # already captured in the CI job output.
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 2
 
 ---
-# iso8583-adapter -- The REST/SOAP boundary and crypto edge.
+# iso8583-adapter, The REST/SOAP boundary and crypto edge.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -454,7 +454,7 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and openshift/base/ carries the
+  # template, both halves are required, and openshift/base/ carries the
   # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
@@ -486,7 +486,7 @@ spec:
   triggers:
     # Rebuild when this BuildConfig itself changes.
     - type: ConfigChange
-    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub,
     # see the instructions at the bottom of this file.
     - type: GitHub
       github:
@@ -494,20 +494,20 @@ spec:
           name: github-webhook-secret
   # A stuck build FAILS instead of hanging forever.
   #
-  # Without this, a build pod that never gets scheduled -- because the
-  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Without this, a build pod that never gets scheduled, because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster, sits
   # Pending indefinitely, and `oc start-build --follow` waits for logs that
   # never arrive. That is how a CI job burns five hours and is then killed by
   # GitHub's own limit with nothing useful in the log.
   #
-  # The deadline covers time spent Pending, not just running -- which is
+  # The deadline covers time spent Pending, not just running, which is
   # exactly the case that needs catching.
   completionDeadlineSeconds: 900     # 15 minutes
 
   resources:
     # Sized DOWN deliberately. These are modest pip installs, and the previous
     # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
-    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # 18Gi of limits at once, more than a sandbox namespace is granted, so
     # the scheduler refused and every build hung.
     #
     # Not a floor to keep lowering: too little and the build is OOM-killed
@@ -519,13 +519,13 @@ spec:
       memory: 1Gi
   # Retention kept deliberately tight. At 3 successful + 5 failed across nine
   # BuildConfigs this retained up to 72 build pods, which buried the console's
-  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # pod list and bloated etcd for no benefit, the build logs that matter are
   # already captured in the CI job output.
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 2
 
 ---
-# ace-stub -- Stand-in for IBM ACE. Not deployed once entitled.
+# ace-stub, Stand-in for IBM ACE. Not deployed once entitled.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -536,7 +536,7 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and openshift/base/ carries the
+  # template, both halves are required, and openshift/base/ carries the
   # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
@@ -568,7 +568,7 @@ spec:
   triggers:
     # Rebuild when this BuildConfig itself changes.
     - type: ConfigChange
-    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub,
     # see the instructions at the bottom of this file.
     - type: GitHub
       github:
@@ -576,20 +576,20 @@ spec:
           name: github-webhook-secret
   # A stuck build FAILS instead of hanging forever.
   #
-  # Without this, a build pod that never gets scheduled -- because the
-  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Without this, a build pod that never gets scheduled, because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster, sits
   # Pending indefinitely, and `oc start-build --follow` waits for logs that
   # never arrive. That is how a CI job burns five hours and is then killed by
   # GitHub's own limit with nothing useful in the log.
   #
-  # The deadline covers time spent Pending, not just running -- which is
+  # The deadline covers time spent Pending, not just running, which is
   # exactly the case that needs catching.
   completionDeadlineSeconds: 900     # 15 minutes
 
   resources:
     # Sized DOWN deliberately. These are modest pip installs, and the previous
     # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
-    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # 18Gi of limits at once, more than a sandbox namespace is granted, so
     # the scheduler refused and every build hung.
     #
     # Not a floor to keep lowering: too little and the build is OOM-killed
@@ -601,13 +601,13 @@ spec:
       memory: 1Gi
   # Retention kept deliberately tight. At 3 successful + 5 failed across nine
   # BuildConfigs this retained up to 72 build pods, which buried the console's
-  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # pod list and bloated etcd for no benefit, the build logs that matter are
   # already captured in the CI job output.
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 2
 
 ---
-# host-simulator -- Fake switch. dev/test namespaces only.
+# host-simulator, Fake switch. dev/test namespaces only.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -618,7 +618,7 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and openshift/base/ carries the
+  # template, both halves are required, and openshift/base/ carries the
   # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
@@ -650,7 +650,7 @@ spec:
   triggers:
     # Rebuild when this BuildConfig itself changes.
     - type: ConfigChange
-    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub,
     # see the instructions at the bottom of this file.
     - type: GitHub
       github:
@@ -658,20 +658,20 @@ spec:
           name: github-webhook-secret
   # A stuck build FAILS instead of hanging forever.
   #
-  # Without this, a build pod that never gets scheduled -- because the
-  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Without this, a build pod that never gets scheduled, because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster, sits
   # Pending indefinitely, and `oc start-build --follow` waits for logs that
   # never arrive. That is how a CI job burns five hours and is then killed by
   # GitHub's own limit with nothing useful in the log.
   #
-  # The deadline covers time spent Pending, not just running -- which is
+  # The deadline covers time spent Pending, not just running, which is
   # exactly the case that needs catching.
   completionDeadlineSeconds: 900     # 15 minutes
 
   resources:
     # Sized DOWN deliberately. These are modest pip installs, and the previous
     # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
-    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # 18Gi of limits at once, more than a sandbox namespace is granted, so
     # the scheduler refused and every build hung.
     #
     # Not a floor to keep lowering: too little and the build is OOM-killed
@@ -683,13 +683,13 @@ spec:
       memory: 1Gi
   # Retention kept deliberately tight. At 3 successful + 5 failed across nine
   # BuildConfigs this retained up to 72 build pods, which buried the console's
-  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # pod list and bloated etcd for no benefit, the build logs that matter are
   # already captured in the CI job output.
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 2
 
 ---
-# analytics-sync -- CronJob image: ledger to ClickHouse.
+# analytics-sync, CronJob image: ledger to ClickHouse.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -700,7 +700,7 @@ metadata:
 spec:
   # Lets other objects in this namespace reference the tag by bare name.
   # Deployments additionally need the resolve-names annotation on the pod
-  # template -- both halves are required, and openshift/base/ carries the
+  # template, both halves are required, and openshift/base/ carries the
   # other one. Missing either produces an identical ImagePullBackOff.
   lookupPolicy:
     local: true
@@ -732,7 +732,7 @@ spec:
   triggers:
     # Rebuild when this BuildConfig itself changes.
     - type: ConfigChange
-    # Rebuild on push. Inert until the webhook URL is registered in GitHub --
+    # Rebuild on push. Inert until the webhook URL is registered in GitHub,
     # see the instructions at the bottom of this file.
     - type: GitHub
       github:
@@ -740,20 +740,20 @@ spec:
           name: github-webhook-secret
   # A stuck build FAILS instead of hanging forever.
   #
-  # Without this, a build pod that never gets scheduled -- because the
-  # namespace quota is full, which is easy to hit on a sandbox cluster -- sits
+  # Without this, a build pod that never gets scheduled, because the
+  # namespace quota is full, which is easy to hit on a sandbox cluster, sits
   # Pending indefinitely, and `oc start-build --follow` waits for logs that
   # never arrive. That is how a CI job burns five hours and is then killed by
   # GitHub's own limit with nothing useful in the log.
   #
-  # The deadline covers time spent Pending, not just running -- which is
+  # The deadline covers time spent Pending, not just running, which is
   # exactly the case that needs catching.
   completionDeadlineSeconds: 900     # 15 minutes
 
   resources:
     # Sized DOWN deliberately. These are modest pip installs, and the previous
     # 512Mi/2Gi meant nine concurrent builds asked for 4.5Gi of requests and
-    # 18Gi of limits at once -- more than a sandbox namespace is granted, so
+    # 18Gi of limits at once, more than a sandbox namespace is granted, so
     # the scheduler refused and every build hung.
     #
     # Not a floor to keep lowering: too little and the build is OOM-killed
@@ -765,7 +765,7 @@ spec:
       memory: 1Gi
   # Retention kept deliberately tight. At 3 successful + 5 failed across nine
   # BuildConfigs this retained up to 72 build pods, which buried the console's
-  # pod list and bloated etcd for no benefit -- the build logs that matter are
+  # pod list and bloated etcd for no benefit, the build logs that matter are
   # already captured in the CI job output.
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 2
@@ -773,7 +773,7 @@ spec:
 ---
 # Shared secret for the GitHub webhook triggers above.
 #
-# PLACEHOLDER. Replace it before registering any webhook -- anyone holding
+# PLACEHOLDER. Replace it before registering any webhook, anyone holding
 # this value can trigger builds in your namespace:
 #
 #     oc create secret generic github-webhook-secret \
@@ -787,7 +787,7 @@ spec:
 #
 # Nine services means nine webhooks, which is tedious. A reasonable
 # alternative for a repo this size is to skip webhooks entirely and rebuild
-# explicitly with `make oc-build` -- nine services rarely all need rebuilding
+# explicitly with `make oc-build`, nine services rarely all need rebuilding
 # on every push anyway, and an explicit build is one fewer moving part.
 apiVersion: v1
 kind: Secret

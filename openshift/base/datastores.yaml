@@ -1,5 +1,5 @@
 ---
-# Redis -- shared idempotency claims and risk velocity windows.
+# Redis, shared idempotency claims and risk velocity windows.
 #
 # Deployment, not StatefulSet, and NO persistence. Deliberate: everything in
 # here is short-lived derived state with a TTL. Idempotency claims expire in
@@ -10,7 +10,7 @@
 #
 # What a restart DOES mean: for up to 24 hours afterwards, a retried request
 # whose claim was lost is treated as new. The ledger's PRIMARY KEY (rrn) is
-# the backstop that keeps this from double-posting -- which is exactly why
+# the backstop that keeps this from double-posting, which is exactly why
 # that constraint, and not this cache, is where correctness lives.
 apiVersion: apps/v1
 kind: Deployment
@@ -75,8 +75,8 @@ spec:
 #
 # The official image runs every *.sh in /docker-entrypoint-initdb.d/ exactly
 # once, when PGDATA is empty. Without this, `auth` and `ledger` simply do not
-# exist and both services crash-loop on startup -- which previously had to be
-# fixed by hand with `oc exec postgres-0 -- psql -c "CREATE DATABASE ..."`
+# exist and both services crash-loop on startup, which previously had to be
+# fixed by hand with `oc exec postgres-0, psql -c "CREATE DATABASE ..."`
 # after every fresh deploy. That step is no longer needed.
 #
 # IMPORTANT: this only fires on an EMPTY volume. An existing postgres-0 keeps
@@ -93,8 +93,8 @@ metadata:
 data:
   init-databases.sh: |
     #!/bin/bash
-    # Database-per-service is about OWNERSHIP -- who may migrate a schema, who
-    # breaks when a column changes -- not about how many servers are running.
+    # Database-per-service is about OWNERSHIP, who may migrate a schema, who
+    # breaks when a column changes, not about how many servers are running.
     # In production these would be separate StatefulSets; one server with two
     # databases gives the same isolation for a fraction of the memory.
     set -euo pipefail
@@ -110,13 +110,13 @@ data:
     echo "databases ready: auth, ledger"
 
 ---
-# Postgres -- the operational database for auth-service and ledger-service.
+# Postgres, the operational database for auth-service and ledger-service.
 #
 # StatefulSet with a PVC, because this holds money and losing it is not
 # recoverable from anywhere else in the platform.
 #
 # ONE server, TWO logical databases. Database-per-service is about ownership
-# -- who may migrate a schema, who breaks when a column changes -- not about
+#, who may migrate a schema, who breaks when a column changes, not about
 # process count. Splitting into two StatefulSets is a config change here and
 # a DSN change in two Deployments, and is the right move the moment either
 # service's load or backup schedule diverges from the other's.
@@ -142,7 +142,7 @@ spec:
         # assign a valid one, which also gets the volume ownership right.
         #
         # This is why the pipeline had a `sed -i '/fsGroup:/d'` step. That
-        # hack can now be deleted -- a blind text delete across every YAML was
+        # hack can now be deleted, a blind text delete across every YAML was
         # always going to remove the wrong line eventually.
         seccompProfile: {type: RuntimeDefault}
       containers:
@@ -163,7 +163,7 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /var/lib/postgresql/data}
             # Runs once, on an empty volume, creating the auth and ledger
-            # databases. Replaces the manual `oc exec postgres-0 -- psql`
+            # databases. Replaces the manual `oc exec postgres-0, psql`
             # step the pipeline used to need.
             - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
           resources:
@@ -185,7 +185,7 @@ spec:
           configMap:
             name: postgres-init
             # 0755: the entrypoint EXECUTES these, and a ConfigMap's default
-            # 0644 makes it silently skip them -- no error, just databases
+            # 0644 makes it silently skip them, no error, just databases
             # that never get created.
             defaultMode: 0755
   volumeClaimTemplates:
@@ -204,7 +204,7 @@ spec:
   ports: [{port: 5432, targetPort: 5432, name: postgres}]
 
 ---
-# ClickHouse -- the analytics warehouse.
+# ClickHouse, the analytics warehouse.
 #
 # Replaces the originally-planned AWS Redshift. Self-hosted, so it needs no
 # cloud account and no credentials, and the code that talks to it is
@@ -248,7 +248,7 @@ spec:
             - {containerPort: 9000, name: native}
           volumeMounts:
             - {name: data, mountPath: /var/lib/clickhouse}
-          # ClickHouse is memory-hungry by design -- it buffers inserts and
+          # ClickHouse is memory-hungry by design, it buffers inserts and
           # holds mark caches. Starving it produces MEMORY_LIMIT_EXCEEDED on
           # queries that would otherwise be trivial, so the request is
           # deliberately well above the application services'.
@@ -284,7 +284,7 @@ spec:
     - {port: 9000, targetPort: 9000, name: native}
 
 ---
-# host-simulator -- the fake switch.
+# host-simulator, the fake switch.
 #
 # Deployed in dev and test namespaces ONLY. The prod overlay deletes this
 # Deployment and repoints ace-stub's SWITCH_HOST at the acquirer's real

@@ -77,7 +77,7 @@ spec:
               mountPath: /var/hsm
 
           # LIVENESS hits /health, which checks only that this process is
-          # responsive. It must NOT check downstreams -- a liveness probe that
+          # responsive. It must NOT check downstreams, a liveness probe that
           # fails during a dependency outage makes OpenShift restart healthy
           # pods, losing in-flight work and fixing nothing.
           livenessProbe:

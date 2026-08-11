@@ -26,7 +26,7 @@ WORKDIR /app
 # This matters specifically for OpenShift: it runs containers under a
 # RANDOMLY assigned UID, not necessarily any user defined in this image, so
 # anything tied to a fixed user's home can end up unreadable to whatever UID
-# actually runs -- which surfaces as a confusing "executable file not found
+# actually runs, which surfaces as a confusing "executable file not found
 # in $PATH" rather than as a permission error.
 COPY --from=builder /install /usr/local
 
@@ -46,7 +46,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 9999
 
-# No HTTP health endpoint -- this speaks raw TCP. The check opens a socket,
+# No HTTP health endpoint, this speaks raw TCP. The check opens a socket,
 # which is the only meaningful liveness signal for a listener.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import socket;socket.create_connection(('127.0.0.1',9999),timeout=3).close()" || exit 1

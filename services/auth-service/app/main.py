@@ -1,11 +1,11 @@
-﻿"""
-auth-service -- owns user identity and issues JWTs.
+"""
+auth-service, owns user identity and issues JWTs.
 
 Owns its OWN database. ledger-service cannot read the users table and
 auth-service cannot read the ledger; the only link between them is
 accounts.user_id, which is an opaque string on the ledger side with no
 foreign key behind it. That is deliberate. A shared users table is the most
-common way a microservice split quietly becomes a distributed monolith --
+common way a microservice split quietly becomes a distributed monolith,
 two services coupled through a schema, unable to deploy or migrate
 independently.
 
@@ -21,7 +21,7 @@ TOKEN VERIFICATION IS LOCAL, NOT A NETWORK CALL. api-gateway verifies the
 HS256 signature itself using the shared secret, rather than calling
 /introspect on every request. Introspection exists for the cases that
 genuinely need current state (has this user been deleted?), but making it
-mandatory would put auth-service in the hot path of every single request --
+mandatory would put auth-service in the hot path of every single request,
 one extra network round trip per call, and a hard dependency that turns an
 auth-service outage into a total platform outage.
 """
@@ -54,7 +54,7 @@ log = configure_logging("auth-service", os.environ.get("LOG_LEVEL", "INFO"))
 
 if JWT_SECRET == _DEV_SECRET:
     log.warning(
-        "JWT_SECRET is unset -- using a development default that is published in "
+        "JWT_SECRET is unset, using a development default that is published in "
         "this source file. Every token issued is forgeable by anyone who can read "
         "the repo. Set JWT_SECRET before deploying anywhere real."
     )
@@ -157,7 +157,7 @@ def register(body: RegisterRequest, request: Request):
 def delete_user(user_id: str, request: Request):
     """
     The compensating action for the registration saga. Called by the gateway
-    when account creation fails after the user row was already written --
+    when account creation fails after the user row was already written,
     without it, a failed registration leaves an orphaned user who can log in
     but owns no account, and whose CNIC now blocks them from retrying.
 

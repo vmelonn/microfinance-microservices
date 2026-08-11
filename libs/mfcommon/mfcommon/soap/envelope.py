@@ -1,5 +1,5 @@
-﻿"""
-SOAP 1.1 envelope construction and parsing -- the REST/SOAP boundary in one
+"""
+SOAP 1.1 envelope construction and parsing, the REST/SOAP boundary in one
 file.
 
 WHY HAND-ROLLED, NOT zeep:
@@ -15,13 +15,13 @@ not need a WSDL compiler; it needs to be obvious and to fail loudly.
 
 This also matches the house style already set by the monolith: the JWT
 implementation, the BCD codec, and the PIN block are all hand-rolled for
-the same reason -- at a protocol boundary, knowing exactly what bytes go
+the same reason, at a protocol boundary, knowing exactly what bytes go
 out matters more than the convenience of a library.
 
 THE FAULT TRAP:
 
 A SOAP fault is not an HTTP error. It arrives as HTTP 500 with a
-well-formed <soap:Fault> in the body, and -- worse -- some stacks return
+well-formed <soap:Fault> in the body, and, worse, some stacks return
 faults as HTTP 200. Code that branches on response.status_code alone will
 either treat a real fault as a transport failure (and retry a transaction
 that was explicitly rejected) or treat it as success (and parse garbage).
@@ -48,7 +48,7 @@ PASSWORD_TEXT_TYPE = (
 )
 
 # The service namespace. Must match ace/Iso8583Library/wsdl/Iso8583Gateway.wsdl
-# exactly -- ACE validates against the WSDL and rejects a mismatched
+# exactly, ACE validates against the WSDL and rejects a mismatched
 # namespace with an unhelpful parse error rather than a clear one.
 ISO8583_NS = "urn:microfinance:iso8583:v1"
 
@@ -143,7 +143,7 @@ def _preview(raw: bytes, limit: int = 200) -> str:
 def parse_response(raw: bytes, *, namespace: str = ISO8583_NS) -> dict:
     """
     Returns the body's child elements as a flat dict. Raises SoapFault if
-    the peer returned a fault -- checked BEFORE anything else, and
+    the peer returned a fault, checked BEFORE anything else, and
     independently of the HTTP status code, for the reason in the module
     docstring.
     """
@@ -158,7 +158,7 @@ def parse_response(raw: bytes, *, namespace: str = ISO8583_NS) -> dict:
     # Body, because well-formed NON-SOAP XML is a routine failure mode: an
     # ingress returning an HTML error page parses as XML perfectly happily.
     # Reporting "SOAP envelope has no Body element" for a 502 page is
-    # technically true and diagnostically useless -- the person reading it
+    # technically true and diagnostically useless, the person reading it
     # needs to know an HTML page arrived, not that it lacked a Body.
     if root.tag != _qn(SOAP_ENV_NS, "Envelope"):
         raise SoapProtocolError(
@@ -175,7 +175,7 @@ def parse_response(raw: bytes, *, namespace: str = ISO8583_NS) -> dict:
 
     fault = body.find(_qn(SOAP_ENV_NS, "Fault"))
     if fault is not None:
-        # SOAP 1.1 fault children are unqualified -- no namespace. A
+        # SOAP 1.1 fault children are unqualified, no namespace. A
         # surprising amount of SOAP client code looks for them in the
         # envelope namespace and silently finds nothing.
         code = (fault.findtext("faultcode") or "unknown").strip()
@@ -185,7 +185,7 @@ def parse_response(raw: bytes, *, namespace: str = ISO8583_NS) -> dict:
         raise SoapFault(code, string, detail)
 
     if len(body) == 0:
-        raise SoapProtocolError("SOAP Body is empty -- expected a response element")
+        raise SoapProtocolError("SOAP Body is empty, expected a response element")
 
     response_element = body[0]
     result = {}
@@ -225,7 +225,7 @@ def parse_request(raw: bytes) -> tuple[str, dict, dict]:
     """
     Server side: returns (operation_name, fields, headers).
 
-    headers is a flat dict of any recognised header values -- currently just
+    headers is a flat dict of any recognised header values, currently just
     CorrelationId and the WS-Security username, which is all the stub and
     ACE need to agree on.
     """

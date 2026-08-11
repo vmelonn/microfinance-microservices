@@ -1,8 +1,8 @@
-﻿"""
+"""
 The load-bearing test of the whole platform.
 
 This proves the SOAP boundary genuinely mediates to binary ISO 8583 and
-back -- not against a mock, but against a real HostSimulator over a real
+back, not against a mock, but against a real HostSimulator over a real
 TCP socket, with real BCD-packed bytes and a real bitmap on the wire.
 
 If this passes, the REST -> SOAP -> ISO 8583 -> SOAP -> REST path works.
@@ -47,7 +47,7 @@ def gateway():
     simulator.start()
     time.sleep(0.3)
 
-    # Imported after the environment is set -- module-level config reads it.
+    # Imported after the environment is set, module-level config reads it.
     from app.main import app
 
     with TestClient(app) as client:
@@ -96,7 +96,7 @@ def test_authorize_produces_a_real_iso8583_message_on_the_wire(gateway):
     assert body["rrn"] == "000123456789"
     assert body["mti"] == "0210"
 
-    # The switch genuinely received a binary 0200 -- this is what separates
+    # The switch genuinely received a binary 0200, this is what separates
     # a stand-in from a mock.
     assert len(simulator.received) > before
     received = [m for m in simulator.received if m["mti"] == "0200"][-1]
@@ -112,7 +112,7 @@ def test_pin_block_survives_the_hex_round_trip_byte_for_byte(gateway):
     and declines a valid transaction with DE 39 = 55, which is close to
     impossible to diagnose from the outside.
 
-    The value here deliberately contains 0x00 and 0x1e -- both ILLEGAL in
+    The value here deliberately contains 0x00 and 0x1e, both ILLEGAL in
     XML 1.0 with no legal escape sequence. Sending DE 52 as raw text rather
     than hex would make this request unparseable.
     """
@@ -141,7 +141,7 @@ def test_pin_block_survives_the_hex_round_trip_byte_for_byte(gateway):
 
 def test_absent_pin_block_leaves_de52_bit_clear(gateway):
     """A balance inquiry has no PIN. The DE 52 bitmap bit must be CLEAR, not
-    set with empty content -- a real switch answers the latter with DE 39 =
+    set with empty content, a real switch answers the latter with DE 39 =
     30 (format error)."""
     client, simulator = gateway
 
@@ -190,7 +190,7 @@ def test_concurrent_requests_each_get_their_own_response(gateway):
     """
     The correlation manager's actual job. The host simulator answers each
     message on its own thread, so responses genuinely arrive out of order.
-    Every caller must still receive the response to ITS request -- crossing
+    Every caller must still receive the response to ITS request, crossing
     them would approve one cardholder's transaction against another's.
     """
     client, _simulator = gateway
@@ -238,7 +238,7 @@ def test_switch_timeout_becomes_a_server_fault_not_a_success(gateway):
     client, _simulator = gateway
 
     # additionalData maps to DE 48, which the simulator reads as a hook to
-    # stay completely silent -- a real switch that has gone away.
+    # stay completely silent, a real switch that has gone away.
     response = _post_soap(
         client,
         "authorizeRequest",
@@ -257,7 +257,7 @@ def test_switch_timeout_becomes_a_server_fault_not_a_success(gateway):
         parse_response(response.content)
 
     fault = exc_info.value
-    assert fault.is_client_fault is False, "a timeout is not the caller's fault -- must not be Client"
+    assert fault.is_client_fault is False, "a timeout is not the caller's fault, must not be Client"
     assert "SWITCH_TIMEOUT" in (fault.detail or "")
     assert "UNKNOWN" in fault.string
 
@@ -311,7 +311,7 @@ def test_unknown_operation_is_rejected_clearly(gateway):
 
 
 def test_network_management_echo_reaches_the_switch(gateway):
-    """What the readiness probe calls -- proves the whole chain, not just
+    """What the readiness probe calls, proves the whole chain, not just
     that this process is running."""
     client, _simulator = gateway
     response = _post_soap(client, "networkManagementRequest", {"networkCode": "301"})

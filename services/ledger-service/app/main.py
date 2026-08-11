@@ -1,5 +1,5 @@
-﻿"""
-ledger-service -- owns accounts, cards, and the double-entry ledger.
+"""
+ledger-service, owns accounts, cards, and the double-entry ledger.
 
 Every route is under /internal. This service has NO OpenShift Route and is
 reachable only from inside the namespace, enforced by a NetworkPolicy that
@@ -117,7 +117,7 @@ def resolve(body: ResolveRequest, request: Request):
 def create_posting(body: PostingRequest, request: Request):
     """
     Idempotent on RRN. Safe to retry from anywhere, including after a
-    timeout where the caller cannot tell whether the first attempt landed --
+    timeout where the caller cannot tell whether the first attempt landed,
     which is exactly the situation transaction-service finds itself in.
     """
     repo: LedgerRepository = request.app.state.repo
@@ -131,11 +131,11 @@ def create_posting(body: PostingRequest, request: Request):
         )
     except Exception as exc:
         # A foreign-key violation reaches here rather than being mislabelled
-        # as "already recorded" -- see repository.record_posting.
+        # as "already recorded", see repository.record_posting.
         log.error(f"posting failed for rrn={body.rrn}: {exc!r}")
         raise HTTPException(
             status_code=422,
-            detail=f"Posting rejected -- debit or credit account does not exist: {exc}",
+            detail=f"Posting rejected, debit or credit account does not exist: {exc}",
         )
 
     log.info(f"posting rrn={body.rrn} status={result['status']} amount_cents={body.amount_cents}")
@@ -182,7 +182,7 @@ def reset(request: Request):
     The monolith's equivalent endpoint required only a valid token, and its
     own docstring admitted any authenticated user could wipe the entire
     ledger. Config-gating is a genuine improvement but still not
-    authorization -- proper role-based access is a follow-up, and this
+    authorization, proper role-based access is a follow-up, and this
     comment exists so that is not forgotten.
     """
     if not ALLOW_LEDGER_RESET_ENABLED():

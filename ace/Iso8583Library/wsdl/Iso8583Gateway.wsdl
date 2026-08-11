@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!--
   Iso8583Gateway - the contract between the REST world and the ISO 8583 world.
 
@@ -138,7 +138,7 @@
                  pass-through now.
 
                  The host simulator also interprets two values here as test
-                 hooks -- "SIMULATE_TIMEOUT" and "DELAY:<seconds>" -- which
+                 hooks - "SIMULATE_TIMEOUT" and "DELAY:<seconds>" - which
                  is what lets the timeout and slow-response paths be tested
                  without a real misbehaving switch. That is a property of
                  the SIMULATOR, not of this contract: a production switch

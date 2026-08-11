@@ -1,5 +1,5 @@
 """
-host-simulator -- a fake payment switch, deployed as a real service.
+host-simulator, a fake payment switch, deployed as a real service.
 
 In the monolith this ran in-process, started by the API's own lifespan
 (RUN_LOCAL_SIMULATOR=1). That worked because there was one process. Here it
@@ -9,7 +9,7 @@ share.
 
 Promoting it to a real service is also more honest. In production this pod
 is simply not deployed, and SWITCH_HOST points at the acquirer's actual
-endpoint instead. Nothing else in the platform can tell the difference --
+endpoint instead. Nothing else in the platform can tell the difference,
 which is the property that makes the test environment worth trusting.
 
 Responses:

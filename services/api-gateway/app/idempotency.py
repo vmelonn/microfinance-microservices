@@ -3,20 +3,20 @@ Idempotency store, swappable between an in-memory dict (today's behavior,
 zero setup, one process only) and Redis (safe across many replicas).
 
 Both implementations fix a real race the original code had: the old
-pattern was "check cache, process, then store result" -- three separate
+pattern was "check cache, process, then store result", three separate
 steps. Two concurrent requests with the SAME brand-new idempotency key
 could both pass the "not seen yet" check before either finished storing,
 and both would get fully processed. That's the same category of race the
-ledger's PRIMARY KEY on RRN was built to close -- this store closes the
+ledger's PRIMARY KEY on RRN was built to close, this store closes the
 equivalent race at the API layer, via an atomic claim step before any
 processing happens at all.
 
 claim() has three possible outcomes:
   - "new"        -- this caller won the race, proceed with processing
   - "duplicate"  -- already fully processed; here's the cached response
-  - "mismatch"   -- same key, but a DIFFERENT request body -- reject, 400
+  - "mismatch"   -- same key, but a DIFFERENT request body, reject, 400
   - "in_progress"-- another caller claimed it and hasn't finished yet
-                    (a genuine, rare race -- the caller should NOT process
+                    (a genuine, rare race, the caller should NOT process
                     again; treat like a 409 and let the client retry)
 """
 
@@ -47,7 +47,7 @@ class IdempotencyStore(ABC):
 
     @abstractmethod
     def clear_all(self) -> None:
-        """Sandbox/testing utility only -- wipes every claim and cached response."""
+        """Sandbox/testing utility only, wipes every claim and cached response."""
         ...
 
 
@@ -96,7 +96,7 @@ class RedisIdempotencyStore(IdempotencyStore):
     """
     Same contract, backed by Redis so every replica shares one answer.
     Two keys per idempotency key: one for the claim (set atomically via
-    SET NX), one for the eventual response -- kept separate so "claimed
+    SET NX), one for the eventual response, kept separate so "claimed
     but still processing" and "claimed and finished" are distinguishable.
     """
 
@@ -111,7 +111,7 @@ class RedisIdempotencyStore(IdempotencyStore):
         return f"idempotency:{key}:response"
 
     def claim(self, key: str, request_hash: str) -> ClaimOutcome:
-        # SET ... NX is Redis's atomic "only set if absent" -- this is the
+        # SET ... NX is Redis's atomic "only set if absent", this is the
         # operation that actually closes the race, the same way the
         # ledger's PRIMARY KEY closed it at the database level.
         claimed = self._redis.set(self._hash_key(key), request_hash, nx=True, ex=self._ttl)
@@ -120,7 +120,7 @@ class RedisIdempotencyStore(IdempotencyStore):
 
         existing_hash = self._redis.get(self._hash_key(key))
         if existing_hash is None:
-            # Expired between the failed claim and this read -- vanishingly
+            # Expired between the failed claim and this read, vanishingly
             # rare, but treat it as safe to retry as new rather than erroring.
             return self.claim(key, request_hash)
 
@@ -140,7 +140,7 @@ class RedisIdempotencyStore(IdempotencyStore):
         self._redis.set(self._response_key(key), json.dumps(response), ex=self._ttl)
 
     def clear_all(self) -> None:
-        # SCAN instead of KEYS -- KEYS blocks the whole Redis server while it
+        # SCAN instead of KEYS, KEYS blocks the whole Redis server while it
         # runs, which is fine for a tiny sandbox but a bad habit to build;
         # SCAN walks the keyspace incrementally without blocking anyone else.
         for key in self._redis.scan_iter(match="idempotency:*"):

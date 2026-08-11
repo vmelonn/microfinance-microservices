@@ -1,6 +1,6 @@
 # Keeps the build context small. This matters more than usual here, because
 # `oc start-build --from-dir=.` UPLOADS the context to the cluster on every
-# build -- without these exclusions each build ships the git history and the
+# build, without these exclusions each build ships the git history and the
 # local virtualenv over the network.
 
 .git/

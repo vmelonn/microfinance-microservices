@@ -7,7 +7,7 @@
 #   1. microfinance-secrets holds REAL values. The base ships a placeholder
 #      Secret so a fresh cluster applies cleanly; applying it here would
 #      deploy a published JWT signing key. Use Sealed Secrets, External
-#      Secrets, or the cluster vault integration -- see the secretGenerator
+#      Secrets, or the cluster vault integration, see the secretGenerator
 #      note below.
 #   2. SWITCH_HOST points at the acquirer's real endpoint. This overlay
 #      DELETES host-simulator; if the switch address is still the simulator's
@@ -104,7 +104,7 @@ patches:
         path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
         value: 100Gi
 
-  # ClickHouse is memory-hungry by design -- it buffers inserts and holds
+  # ClickHouse is memory-hungry by design, it buffers inserts and holds
   # mark caches. Under-provisioning produces MEMORY_LIMIT_EXCEEDED on queries
   # that should be trivial.
   - target: {kind: StatefulSet, name: clickhouse}

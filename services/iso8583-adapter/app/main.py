@@ -1,5 +1,5 @@
 """
-iso8583-adapter -- the REST/SOAP boundary, and the platform's crypto edge.
+iso8583-adapter, the REST/SOAP boundary, and the platform's crypto edge.
 
 Two responsibilities, both of which are the reason this is a separate pod:
 
@@ -18,7 +18,7 @@ Two responsibilities, both of which are the reason this is a separate pod:
 THE TIMEOUT CONTRACT, restated because it is the thing most easily got wrong:
 
 A timeout is not a decline. When ACE reports SWITCH_TIMEOUT the transaction
-may well have been authorized and the cardholder already debited -- only the
+may well have been authorized and the cardholder already debited, only the
 response was lost. This service therefore returns outcome="unknown", never
 "declined", and reports whether a reversal was issued. transaction-service
 uses that to decide NOT to post to the ledger. Any code that collapses
@@ -63,11 +63,11 @@ async def lifespan(app: FastAPI):
     if HSM_KEY_PATH and HSM_MASTER_KEY_HEX:
         kms = LocalKeyManagementService(master_key=bytes.fromhex(HSM_MASTER_KEY_HEX))
         app.state.hsm = MockHSM(kms=kms, persisted_key_path=HSM_KEY_PATH)
-        log.info(f"HSM base key persisted at {HSM_KEY_PATH} -- survives restarts")
+        log.info(f"HSM base key persisted at {HSM_KEY_PATH}, survives restarts")
     else:
         app.state.hsm = MockHSM()
         log.warning(
-            "HSM_KEY_PERSISTENCE_PATH/HSM_MASTER_KEY_HEX unset -- the base key is "
+            "HSM_KEY_PERSISTENCE_PATH/HSM_MASTER_KEY_HEX unset, the base key is "
             "regenerated every process start. Anything encrypted before a restart "
             "cannot be decrypted after one. Acceptable for a demo, never for a "
             "deployment with more than one replica: two pods hold DIFFERENT keys, "
@@ -101,7 +101,7 @@ async def adopt_correlation_id(request: Request, call_next):
 
 class AuthorizeRequest(BaseModel):
     card_number: str = Field(..., min_length=12, max_length=19)
-    # Plaintext PIN crosses exactly ONE internal hop -- gateway to here --
+    # Plaintext PIN crosses exactly ONE internal hop, gateway to here,
     # and is encrypted into a PIN block before going any further. It is
     # never logged (mfcommon.observability.audit redacts it), never
     # persisted, and never leaves this service in plaintext. In a real PCI
@@ -146,7 +146,7 @@ def authorize(body: AuthorizeRequest, request: Request):
     ksn = None
     if body.pin is not None:
         # The ONLY place a PIN becomes a PIN block. Returns hex, not raw
-        # bytes -- see the PinBlockHex note in the WSDL for why raw bytes
+        # bytes, see the PinBlockHex note in the WSDL for why raw bytes
         # cannot cross XML.
         ksn, encrypted = state.hsm.encrypt_pin_block(body.pin, body.card_number)
         pin_block_hex = encrypted.hex()
@@ -175,10 +175,10 @@ def authorize(body: AuthorizeRequest, request: Request):
         if "SWITCH_TIMEOUT" in detail:
             # The dangerous branch. ACE already sent a reversal, but the
             # business outcome remains unknown. Reported as "unknown" so the
-            # caller declines to post to the ledger -- rather than as
+            # caller declines to post to the ledger, rather than as
             # "declined", which would imply the money definitely did not
             # move.
-            log.error(f"SWITCH TIMEOUT rrn={body.rrn} -- outcome unknown, reversal sent")
+            log.error(f"SWITCH TIMEOUT rrn={body.rrn}, outcome unknown, reversal sent")
             return AuthorizeResponse(
                 outcome="unknown",
                 response_text=fault.string,
@@ -274,7 +274,7 @@ class ReverseRequest(BaseModel):
 @app.post("/internal/iso8583/reverse")
 def reverse(body: ReverseRequest, request: Request):
     """
-    Explicit reversal, for the saga's compensation path -- when the ledger
+    Explicit reversal, for the saga's compensation path, when the ledger
     posting fails after an approved authorization.
 
     Idempotent at the switch, so this is safe to retry until acknowledged.

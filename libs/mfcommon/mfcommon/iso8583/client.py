@@ -1,11 +1,11 @@
-﻿"""
+"""
 ISO 8583 TCP client: owns the live connection to a switch/host simulator.
 
-This layer knows nothing about *what* a message means -- it only knows how
+This layer knows nothing about *what* a message means, it only knows how
 to get bytes onto a socket and parsed messages back out, keep the
 connection alive, and reconnect if it drops. Matching a response to the
 request that caused it (STAN-based correlation) is deliberately NOT handled
-here -- that's Layer 3's job. This client just hands every parsed message
+here, that's Layer 3's job. This client just hands every parsed message
 that arrives to a callback and lets whatever's above it sort out what to
 do with it.
 """
@@ -35,7 +35,7 @@ class ISO8583Client:
         self.heartbeat_interval = heartbeat_interval
         self.on_message = on_message  # callback(parsed_dict), called for every incoming message
         self.reconnect_delay = reconnect_delay
-        self.audit_logger = audit_logger  # Layer 8 -- purely observes, never affects processing
+        self.audit_logger = audit_logger  # Layer 8, purely observes, never affects processing
 
         self._sock = None
         self._connected = threading.Event()
@@ -43,7 +43,7 @@ class ISO8583Client:
         self._send_lock = threading.Lock()
         self._stan_counter = 0
 
-    # -- connection lifecycle --------------------------------------------------
+    #, connection lifecycle --------------------------------------------------
 
     def connect(self):
         """Starts the connection loop in the background. Returns immediately."""
@@ -75,7 +75,7 @@ class ISO8583Client:
                 # Catching broadly (not just ConnectionError/OSError) is
                 # deliberate: if _receive_loop dies from something we didn't
                 # anticipate (a parsing error, for instance), we must still
-                # reach the cleanup below -- otherwise self._connected stays
+                # reach the cleanup below, otherwise self._connected stays
                 # True forever even though nothing is actually listening for
                 # responses anymore, which is a much worse failure than a
                 # normal disconnect: sends keep "succeeding" while every
@@ -87,14 +87,14 @@ class ISO8583Client:
                 break
             time.sleep(self.reconnect_delay)  # backoff before trying again
 
-    # -- sending ------------------------------------------------------------------
+    #, sending ------------------------------------------------------------------
 
     def next_stan(self) -> str:
         self._stan_counter = (self._stan_counter + 1) % 1000000
         return f"{self._stan_counter:06d}"
 
     def send_message(self, mti: str, fields: dict):
-        """Builds and sends a message. Does not wait for a response -- see Layer 3."""
+        """Builds and sends a message. Does not wait for a response, see Layer 3."""
         if not self._connected.is_set():
             raise ConnectionError("Not connected to switch")
         raw = build_message(mti, fields)
@@ -109,19 +109,19 @@ class ISO8583Client:
     def sign_off(self):
         self.send_message("0800", {11: self.next_stan(), 70: "002"})
 
-    # -- receiving ------------------------------------------------------------------
+    #, receiving ------------------------------------------------------------------
 
     def _receive_loop(self):
         while not self._stop.is_set():
             # Wait (with a timeout) for data to actually be available before
-            # reading, rather than putting a timeout on the socket itself --
+            # reading, rather than putting a timeout on the socket itself,
             # a socket-level timeout could fire in the MIDDLE of a multi-byte
             # read_exact() call, corrupting the byte stream for every message
             # after it. select() only tells us "there's something to read,"
             # then the actual read proceeds fully blocking, safely.
             readable, _, _ = select.select([self._sock], [], [], 1.0)
             if not readable:
-                continue  # nothing arrived in this window -- just re-check self._stop
+                continue  # nothing arrived in this window, just re-check self._stop
             raw = read_framed_message(self._sock, self.prefix_bytes)
             parsed, _consumed = parse_message(raw)
             if self.audit_logger:
@@ -129,7 +129,7 @@ class ISO8583Client:
             if self.on_message:
                 self.on_message(parsed)
 
-    # -- heartbeat ------------------------------------------------------------------
+    #, heartbeat ------------------------------------------------------------------
 
     def _heartbeat_loop(self):
         """Sends a periodic echo test so idle connections don't get silently dropped."""

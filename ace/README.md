@@ -1,4 +1,4 @@
-# IBM ACE — ISO 8583 gateway
+# IBM ACE, ISO 8583 gateway
 
 These artifacts implement `Iso8583Library/wsdl/Iso8583Gateway.wsdl` on IBM App
 Connect Enterprise. `services/ace-stub/` implements the same WSDL in Python
@@ -13,7 +13,7 @@ and is what runs today.
 | `esql/SoapToIso.esql` | **Complete, not compiled.** |
 | `esql/IsoToSoap.esql` | **Complete, not compiled.** |
 | `Iso8583Gateway.msgflow` | **Specified below, not authored as a file.** |
-| `Dockerfile` | **Complete, never built** — the base image needs an entitlement key. |
+| `Dockerfile` | **Complete, never built**, the base image needs an entitlement key. |
 
 Nothing here has been run. The IBM entitlement had not come through, so
 there is no Toolkit to compile a BAR with and no entitled base image to pull.
@@ -22,19 +22,19 @@ Treat these as ready-to-import, not as verified-working.
 **The msgflow is deliberately not a hand-written file.** A `.msgflow` is
 Eclipse EMF XMI with internal identifiers and layout data. Hand-authoring one
 produces a file that either fails to open or opens subtly wrong, which is
-worse than not shipping it — so the node graph is specified precisely below
+worse than not shipping it, so the node graph is specified precisely below
 and should be assembled in the Toolkit, where the connections get validated.
 
 ## Why the platform does not wait for any of this
 
 `iso8583-adapter` talks to whatever `ISO8583_SOAP_ENDPOINT` names. Today that
 is `ace-stub`, which serves the same WSDL, accepts the same envelopes, and
-does the same mediation in Python — real BCD packing, a real bitmap, a real
+does the same mediation in Python, real BCD packing, a real bitmap, a real
 MLI-framed TCP socket to the switch. It is a stand-in, not a mock.
 
 So the SOAP boundary is exercised end-to-end from day one, and ACE arrives
-into a slot whose shape is already proven. The alternative — building the
-SOAP layer only once the licence landed — would have left the riskiest
+into a slot whose shape is already proven. The alternative, building the
+SOAP layer only once the licence landed, would have left the riskiest
 integration in the platform untested until the latest possible moment.
 
 ## The message flow
@@ -108,7 +108,7 @@ something forces them together.
 
 `tests/e2e/test_dfdl_conformance.py` is that forcing function: it builds
 messages with the Python codec and asserts the exact byte layout the DFDL
-schema declares — BCD packing, odd-length `F` filler, LLVAR digit-vs-byte
+schema declares, BCD packing, odd-length `F` filler, LLVAR digit-vs-byte
 counts, bitmap bit positions, and the no-trim rule on DE 52 and DE 64.
 
 If you change padding, length-prefix encoding, or the binary-field list in
@@ -121,7 +121,7 @@ Two details worth knowing before editing either:
 - **DE 52 and DE 64 must never be trimmed.** An encrypted PIN block can
   coincidentally end in a byte that decodes to whitespace; trimming it
   removes real key material. Rare enough to survive testing and reach
-  production — the monolith's README documents finding exactly this via a
+  production, the monolith's README documents finding exactly this via a
   flaky test. The DFDL sets `textTrimKind="none"`; the Python codec carries
   a `binary` flag on `FieldSpec`.
 
@@ -154,8 +154,7 @@ Honest list, not hypothetical:
    forwarding institution IDs. The simulator only needs MTI and STAN; a real
    switch will want the genuine values echoed from the original request.
 2. **BCD filler position.** This implementation pads odd-length numerics with
-   a *trailing* `F`. Some processors pad leading. Confirm against the spec —
-   if it differs, every odd-length field shifts by a nibble.
+   a *trailing* `F`. Some processors pad leading. Confirm against the spec, if it differs, every odd-length field shifts by a nibble.
 3. **LLVAR prefix encoding.** BCD here; some processors use ASCII.
 4. **STAN scope.** The counter is per integration server. One replica holding
    one connection is correct; scaling out needs either per-replica STAN

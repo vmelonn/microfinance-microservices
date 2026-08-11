@@ -1,7 +1,7 @@
-﻿name: Cluster cleanup
+name: Cluster cleanup
 
 # Manual only. This is the escape hatch for when the namespace is wedged and
-# the OpenShift web terminal will not start -- which is exactly when you most
+# the OpenShift web terminal will not start, which is exactly when you most
 # need a shell, because the web terminal is itself a pod and cannot be
 # scheduled once pending builds have consumed the pod quota.
 #
@@ -34,7 +34,7 @@ jobs:
       # oc installed with curl rather than redhat-actions/openshift-tools-installer.
       # That action targets a deprecated Node runtime, races on the tool cache
       # when jobs run concurrently, and matches eleven candidate tarballs
-      # before picking one -- three of the four warnings on every run came
+      # before picking one, three of the four warnings on every run came
       # from it. This is four lines and has none of those failure modes.
       - name: Install oc
         run: |
@@ -94,7 +94,7 @@ jobs:
       - name: Prune finished jobs
         if: ${{ inputs.prune_jobs }}
         run: |
-          # Deleting the Job removes its pods too. Only completed ones -- an
+          # Deleting the Job removes its pods too. Only completed ones, an
           # in-flight analytics sync should be left to finish.
           DONE=$(oc get jobs --no-headers 2>/dev/null \
                    | awk '$2 ~ /1\/1/ {print $1}' || true)

@@ -26,7 +26,7 @@ WORKDIR /app
 # This matters specifically for OpenShift: it runs containers under a
 # RANDOMLY assigned UID, not necessarily any user defined in this image, so
 # anything tied to a fixed user's home can end up unreadable to whatever UID
-# actually runs -- which surfaces as a confusing "executable file not found
+# actually runs, which surfaces as a confusing "executable file not found
 # in $PATH" rather than as a permission error.
 COPY --from=builder /install /usr/local
 
@@ -47,7 +47,7 @@ ENV PYTHONUNBUFFERED=1 \
 EXPOSE 8083
 
 # Hits the real /health endpoint rather than merely checking the process is
-# alive. Note this is the LIVENESS check -- /ready is the one that verifies
+# alive. Note this is the LIVENESS check, /ready is the one that verifies
 # downstream dependencies, and OpenShift probes it separately.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:8083/health')" || exit 1

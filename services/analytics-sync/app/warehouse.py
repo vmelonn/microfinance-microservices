@@ -2,7 +2,7 @@
 ClickHouse analytics warehouse.
 
 WHY A SEPARATE STORE AT ALL. The ledger's Postgres is tuned for "does this
-account have the funds, right now" -- a handful of rows read and written per
+account have the funds, right now", a handful of rows read and written per
 transaction, indexed for point lookups. Analytics asks the opposite
 question: "what was transaction volume by day, by entry mode, across the
 last year", touching millions of rows and almost never a single one. One
@@ -12,13 +12,13 @@ export from the operational database into a columnar one.
 WHY CLICKHOUSE RATHER THAN REDSHIFT. Redshift was the original plan and was
 dropped for a practical reason and a technical one. Practical: it needs an
 AWS account, a provisioned cluster, and credentials, none of which were
-available -- so the integration would have been correct-shaped, untestable
+available, so the integration would have been correct-shaped, untestable
 code, exactly the position `AWSKeyManagementService` is already stuck in.
 ClickHouse self-hosts in a container, so this code is genuinely exercised by
 CI. Technical: the loading model suits this workload better, as below.
 
 THE LOADING MODEL IS THE OPPOSITE OF REDSHIFT'S. Redshift punishes
-row-by-row INSERT and wants COPY FROM S3 -- an S3 bucket, an IAM role, a
+row-by-row INSERT and wants COPY FROM S3, an S3 bucket, an IAM role, a
 staging table, and MERGE grammar. ClickHouse wants large batched INSERTs and
 needs none of that. Several hundred lines of planned infrastructure simply
 do not exist here, which is a real simplification rather than a shortcut.
@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 # Inserted in batches of this size. ClickHouse strongly prefers few large
-# inserts to many small ones -- every INSERT creates a "part" on disk that
+# inserts to many small ones, every INSERT creates a "part" on disk that
 # the background merge process must later consolidate, so thousands of tiny
 # inserts produce thousands of parts and eventually a "too many parts"
 # error that stalls ingestion entirely.
@@ -65,8 +65,8 @@ TTL toDateTime(transaction_ts) + INTERVAL 7 YEAR
 #     time-bounded, and the sparse primary index lets ClickHouse skip whole
 #     granules outside the range.
 #   - rrn completes the key, which makes (ts, rrn) the DEDUPLICATION key.
-#     Both components are stable for a given transaction -- transaction_ts
-#     comes from the operational row's created_at and never changes -- so
+#     Both components are stable for a given transaction, transaction_ts
+#     comes from the operational row's created_at and never changes, so
 #     re-loading the same RRN collapses correctly.
 #
 # PARTITION BY toYYYYMM: makes the 7-year TTL a metadata-only DROP PARTITION
@@ -95,7 +95,7 @@ ORDER BY table_name
 # SQLite's string format carries, so every sync re-processed the same rows
 # forever. Storing the watermark as the EXACT string the source database
 # emitted, and feeding that identical string back as the `since` parameter,
-# removes the cross-engine conversion entirely -- there is no parse, so
+# removes the cross-engine conversion entirely, there is no parse, so
 # there is nothing to lose in translation.
 
 AGG_TABLE_DDL = """
@@ -126,7 +126,7 @@ GROUP BY day, account_id
 # TRAP: this view fires on INSERT, BEFORE ReplacingMergeTree deduplicates.
 # Re-loading a duplicate RRN double-counts here even though
 # fact_transactions ends up correct. The watermark is therefore not merely
-# an optimisation -- it is what keeps these aggregates honest, and that is
+# an optimisation, it is what keeps these aggregates honest, and that is
 # why sync.py refuses to advance it on a failed batch.
 
 
@@ -186,7 +186,7 @@ class ClickHouseWarehouse(DataWarehouse):
 
     def get_watermark(self, table_name: str) -> str | None:
         # FINAL forces deduplication at read time. Without it, a watermark
-        # updated twice could return the OLDER row -- and a watermark that
+        # updated twice could return the OLDER row, and a watermark that
         # goes backwards re-loads rows that are already present, which the
         # materialized view would then double-count.
         result = self.client.query(
@@ -253,7 +253,7 @@ class ClickHouseWarehouse(DataWarehouse):
 def _parse_ts(value) -> datetime:
     """
     Source timestamps arrive as strings. Anything without an explicit offset
-    is treated as UTC -- never as local time, which would shift every row by
+    is treated as UTC, never as local time, which would shift every row by
     the pod's timezone and make cross-region reports disagree.
     """
     if isinstance(value, datetime):

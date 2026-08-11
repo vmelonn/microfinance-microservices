@@ -1,4 +1,4 @@
-﻿# microfinance-microservices
+# microfinance-microservices
 #
 #   make install    set up the local venv
 #   make test       run every test suite
@@ -57,7 +57,7 @@ install:
 	@echo "ready. run 'make test'"
 
 # Each service owns a top-level `app` package, so they cannot share one
-# sys.path -- two services' app.main would shadow each other. Hence one
+# sys.path, two services' app.main would shadow each other. Hence one
 # pytest invocation per service.
 test: test-shared test-services
 
@@ -76,7 +76,7 @@ test-services:
 lint:
 	@$(PY) -m compileall -q libs services && echo "syntax OK"
 
-# The whole platform as plain processes -- no container engine needed.
+# The whole platform as plain processes, no container engine needed.
 # SQLite stands in for Postgres, in-memory state for Redis, so this cannot
 # demonstrate cross-replica behaviour. Use `make up` for that.
 verify:
@@ -113,10 +113,10 @@ build:
 
 # --- OpenShift -------------------------------------------------------------
 # The full first-time sequence is: oc-init, oc-build, deploy-dev.
-# None of it needs a local container engine -- builds happen in the cluster.
+# None of it needs a local container engine, builds happen in the cluster.
 
 oc-init:
-	@oc whoami >/dev/null 2>&1 || { echo "not logged in -- run the 'oc login' command from the console"; exit 1; }
+	@oc whoami >/dev/null 2>&1 || { echo "not logged in, run the 'oc login' command from the console"; exit 1; }
 	oc apply -f openshift/build/build.yaml
 	@echo "ImageStreams and BuildConfigs created. Next: make oc-build"
 

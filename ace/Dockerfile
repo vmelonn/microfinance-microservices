@@ -1,4 +1,4 @@
-# IBM App Connect Enterprise -- ISO 8583 SOAP gateway.
+# IBM App Connect Enterprise, ISO 8583 SOAP gateway.
 #
 # NEVER BUILT. The base image lives behind IBM's entitled registry and the
 # key had not come through. The build steps are correct as far as they can be
@@ -41,7 +41,7 @@ USER 1000
 EXPOSE 7800 7600
 
 # The integration server's own admin REST endpoint. Reports whether the
-# deployed flows are actually running, not merely that the process started --
+# deployed flows are actually running, not merely that the process started,
 # ACE will happily run with a BAR that failed to deploy.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:7600/apiv2/servers || exit 1

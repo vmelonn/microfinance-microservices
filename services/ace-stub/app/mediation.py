@@ -14,7 +14,7 @@ rather than a mock. A mock returns canned responses. This module genuinely:
 Every one of those steps is a step ACE will perform, using a DFDL schema
 and ESQL instead of Python. The bytes on the wire are identical. That means
 the integration tests written against this stub remain valid the day ACE
-takes over -- they are testing the contract, not the implementation.
+takes over, they are testing the contract, not the implementation.
 
 The mapping below is the specification that ace/Iso8583Gateway/esql/
 SoapToIso.esql implements. Those two must agree. If you add a field here,
@@ -57,7 +57,7 @@ def soap_to_iso_authorize(fields: dict) -> tuple[str, dict]:
     correlation manager at send time, because STAN must be unique per
     connection and only the component owning the connection can guarantee
     that. A caller-supplied STAN is accepted in the WSDL but treated as a
-    hint that this layer overrides -- the alternative is two in-flight
+    hint that this layer overrides, the alternative is two in-flight
     requests colliding on the same STAN and each receiving the other's
     response, which is the worst possible failure in a payment system.
     """
@@ -97,7 +97,7 @@ def soap_to_iso_authorize(fields: dict) -> tuple[str, dict]:
         de[103] = account_id_2
 
     # DE 48, additional data (private use). Pass-through: this layer assigns
-    # it no meaning, because the standard assigns it none either -- every
+    # it no meaning, because the standard assigns it none either, every
     # processor defines its own. The host simulator happens to read two
     # sentinel values out of it to drive its timeout and delay behaviour,
     # which is how the failure paths get tested without a real misbehaving
@@ -114,7 +114,7 @@ def soap_to_iso_reverse(fields: dict) -> tuple[str, dict]:
     reverseRequest -> (0400, {DE}).
 
     DE 90 is built by the correlation layer from originalMti + originalStan,
-    so it is not assembled here -- see mfcommon.iso8583.reversal.
+    so it is not assembled here, see mfcommon.iso8583.reversal.
     """
     return "0400", {
         2: _require(fields, "pan"),
@@ -137,7 +137,7 @@ def iso_to_soap_authorize(parsed: dict, fallback_rrn: str) -> dict:
     responseText is resolved from the standard's DE 39 table here rather
     than in each caller, so no service downstream needs to carry a copy of
     the code table. An unknown code produces a descriptive string instead
-    of None -- a missing reason in a decline log is a support ticket.
+    of None, a missing reason in a decline log is a support ticket.
     """
     de = parsed["fields"]
     code = de.get(39, "")

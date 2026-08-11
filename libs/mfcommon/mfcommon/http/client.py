@@ -12,7 +12,7 @@ Three behaviours, and the reasoning for each:
 1. TIMEOUTS ARE MANDATORY, not optional.
    httpx defaults to a 5s timeout, but a service that forgets to set one
    explicitly inherits whatever the default happens to be that release. A
-   downstream service that hangs must not be able to hang its caller too --
+   downstream service that hangs must not be able to hang its caller too,
    that is how one slow pod takes down a whole platform. Every call here
    has an explicit deadline.
 
@@ -20,7 +20,7 @@ Three behaviours, and the reasoning for each:
    Retrying a GET is free. Retrying "post these ledger entries" can move
    money twice. The retry policy is therefore opt-in per call, never a
    blanket default, and the only POSTs that opt in are the ones carrying an
-   RRN or idempotency key that makes them safe -- exactly the guarantee
+   RRN or idempotency key that makes them safe, exactly the guarantee
    ledger-service's PRIMARY KEY (rrn) provides.
 
 3. CIRCUIT BREAKING.
@@ -50,7 +50,7 @@ class ServiceCallError(Exception):
 
 class ServiceRejectedError(Exception):
     """
-    A downstream returned a 4xx -- it understood the request and refused it.
+    A downstream returned a 4xx, it understood the request and refused it.
     Kept separate from ServiceCallError because the two need opposite
     handling: a 4xx must NEVER be retried (the answer will not change) and
     should usually be surfaced to the caller as-is, while a 5xx may be
@@ -100,7 +100,7 @@ class CircuitBreaker:
 
 class ServiceClient:
     """
-    One instance per downstream service, held for the process lifetime --
+    One instance per downstream service, held for the process lifetime,
     the breaker state and the connection pool are both per-downstream, and
     both are meaningless if you build a fresh client per request.
     """
@@ -135,7 +135,7 @@ class ServiceClient:
 
     def post(self, path: str, json: dict, *, retries: int = 0, timeout: float | None = None, **kwargs):
         """
-        retries defaults to 0 -- POSTs are assumed unsafe to repeat unless
+        retries defaults to 0, POSTs are assumed unsafe to repeat unless
         the caller explicitly says otherwise. Pass retries>0 ONLY when the
         endpoint is idempotent on a key in the body (an RRN, an idempotency
         key). Getting this wrong duplicates money movement.
@@ -148,7 +148,7 @@ class ServiceClient:
         if self.breaker.is_open:
             raise ServiceCallError(
                 self.service_name,
-                f"circuit breaker is open -- not attempting {method} {path}",
+                f"circuit breaker is open, not attempting {method} {path}",
             )
 
         headers = outbound_headers(kwargs.pop("headers", None))
@@ -162,7 +162,7 @@ class ServiceClient:
                 )
             except httpx.RequestError as exc:
                 # Transport-level: connection refused, DNS failure, read
-                # timeout. For a POST this is the genuinely ambiguous case --
+                # timeout. For a POST this is the genuinely ambiguous case,
                 # the request may well have been processed.
                 last_error = ServiceCallError(self.service_name, f"transport error: {exc!r}")
                 self.breaker.record_failure()
