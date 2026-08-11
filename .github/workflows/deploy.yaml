@@ -177,15 +177,23 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false        # one broken service should not hide the others
-      # THE IMPORTANT ONE. Nine simultaneous build pods, on top of the twelve
-      # already running, exceeded the namespace quota. The build pods were
-      # never scheduled, sat Pending, and `--follow` waited for logs from a
-      # pod that did not exist, five hours of nothing.
+      # Sized against the measured quota rather than guessed.
       #
-      # Three at a time bounds the peak. Wall-clock time goes up; builds that
-      # actually finish are worth more than builds that start in parallel and
-      # hang.
-      max-parallel: 3
+      # Builds have their OWN quota scope, `compute-build`, separate from the
+      # one running pods use. Its binding limit is limits.memory: 14Gi.
+      #
+      #   old sizing:  9 parallel x 2Gi limit = 18Gi  >  14Gi   never scheduled
+      #   now:         9 parallel x 1Gi limit =  9Gi  <  14Gi   fits
+      #
+      # So the original five-hour hang was this ceiling, and shrinking the
+      # build pods already fixed it. 6 keeps roughly 8Gi of headroom while
+      # halving wall-clock time against the 3 that was set before the numbers
+      # were known.
+      #
+      # The real build-time win is a shared base image: eight of the nine
+      # services install the identical fastapi/uvicorn/pydantic/httpx stack
+      # from PyPI on every build, which is what makes each one take minutes.
+      max-parallel: 6
       matrix:
         service:
           - api-gateway

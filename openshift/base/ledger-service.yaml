@@ -67,8 +67,15 @@ spec:
           # are set correctly. Memory IS limited, because a leak without a
           # limit takes down the whole node rather than one pod.
           resources:
+            # An explicit CPU limit, despite CFS throttling being a real cost
+            # on a latency-sensitive path. The namespace LimitRange injects a
+            # DEFAULT limit of 1 CPU into any pod that omits one, so omitting
+            # it does not avoid a limit, it accepts the largest possible one
+            # and burns limits.cpu quota at 1 per pod. 500m against a 50m
+            # request is still 10x burst, and these services wait on
+            # downstreams far more than they compute.
             requests: {cpu: 50m, memory: 128Mi}
-            limits: {memory: 512Mi}
+            limits: {cpu: 500m, memory: 512Mi}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
