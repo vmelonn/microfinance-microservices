@@ -1,4 +1,4 @@
-name: OpenShift CI/CD
+﻿name: OpenShift CI/CD
 
 on:
   push:
@@ -120,7 +120,16 @@ jobs:
         # Builds are the spikiest thing this pipeline does. Seeing the
         # namespace's remaining capacity here makes a later Pending build
         # immediately explicable rather than mysterious.
-        run: oc get quota -o wide || echo "(no quota set on this namespace)"
+        run: |
+          # THREE different objects can enforce limits and `oc get quota` shows
+          # only the first. A Red Hat sandbox uses the second, which is why
+          # that command printed nothing at all.
+          echo "--- ResourceQuota (namespaced) ---"
+          oc get resourcequota -o wide 2>/dev/null || echo "  none"
+          echo "--- AppliedClusterResourceQuota (what a sandbox actually uses) ---"
+          oc describe appliedclusterresourcequota 2>/dev/null || echo "  none"
+          echo "--- LimitRange (per-pod defaults and ceilings) ---"
+          oc get limitrange -o wide 2>/dev/null || echo "  none"
 
   # ---------------------------------------------------------------------
   # Nine images, three at a time.
@@ -210,7 +219,8 @@ jobs:
           echo "--- logs ---"
           oc logs build/"$BUILD" --tail=100 || echo "(no logs -- the pod never started)"
           echo "--- quota (a Pending build is almost always this) ---"
-          oc get quota -o wide || true
+          oc get resourcequota -o wide 2>/dev/null || true
+          oc describe appliedclusterresourcequota 2>/dev/null || true
           exit 1
 
   # ---------------------------------------------------------------------

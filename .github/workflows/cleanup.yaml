@@ -1,4 +1,4 @@
-name: Cluster cleanup
+﻿name: Cluster cleanup
 
 # Manual only. This is the escape hatch for when the namespace is wedged and
 # the OpenShift web terminal will not start -- which is exactly when you most
@@ -110,7 +110,15 @@ jobs:
         run: |
           echo "pods:  $(oc get pods --no-headers 2>/dev/null | wc -l)"
           echo "--- quota ---"
-          oc get quota -o wide 2>/dev/null || echo "  (no quota object on this namespace)"
+          # THREE different objects can enforce limits and `oc get quota` shows
+          # only the first. A Red Hat sandbox uses the second, which is why
+          # that command printed nothing at all.
+          echo "--- ResourceQuota (namespaced) ---"
+          oc get resourcequota -o wide 2>/dev/null || echo "  none"
+          echo "--- AppliedClusterResourceQuota (what a sandbox actually uses) ---"
+          oc describe appliedclusterresourcequota 2>/dev/null || echo "  none"
+          echo "--- LimitRange (per-pod defaults and ceilings) ---"
+          oc get limitrange -o wide 2>/dev/null || echo "  none"
           echo "--- still running ---"
           oc get pods --no-headers --field-selector=status.phase==Running \
             | awk '{print "  " $1 "  " $3}'
