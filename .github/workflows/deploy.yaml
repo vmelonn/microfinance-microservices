@@ -3,7 +3,19 @@
 on:
   push:
     branches: [main]
+    # Changes that cannot affect what runs in the cluster do not deploy.
+    # Nine cluster builds to publish a README edit is a waste of quota and,
+    # on a constrained namespace, actively disruptive.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "PLAN.md"
+      - ".gitignore"
   workflow_dispatch:        # re-run a deploy without an empty commit
+
+# Also honoured: putting [skip ci] in a commit message skips the run
+# entirely. GitHub handles that natively -- useful for a commit that touches
+# code but is not ready to go to the cluster.
 
 # Two pushes in quick succession would otherwise race: one deploy rolling out
 # while another rebuilds the images underneath it. Queue them instead.
@@ -262,34 +274,85 @@ jobs:
           oc login --token="$TOKEN" --server="$SERVER" --insecure-skip-tls-verify=true
           oc project "$NAMESPACE"
 
-      # Ordered by dependency: the switch and the SOAP gateway first, then the
-      # services that need them, then the edge. A gateway rolled out before
-      # the adapter is ready just fails its own readiness probe and drags the
-      # rollout out for no reason.
-      - name: Roll out
+      # Restart everything first, then wait for everything.
+      #
+      # Previously this restarted and waited service-by-service, which made
+      # the worst case the SUM of eight timeouts -- longer than the job's own
+      # limit. Restarting all of them first makes it the slowest chain
+      # instead. Dependency order still matters for restart (the switch and
+      # the SOAP gateway first) but not for waiting: Kubernetes retries
+      # readiness, so the adapter simply stays not-ready until ace-stub is up
+      # and then goes ready on its own.
+      - name: Restart deployments
         run: |
           set -euo pipefail
           for svc in host-simulator ace-stub iso8583-adapter \
                      ledger-service auth-service risk-service \
                      transaction-service api-gateway; do
-            echo "::group::$svc"
             oc rollout restart deployment/$svc
-
-            # `oc rollout status` is the right tool. The hand-rolled polling
-            # loop it replaces existed to work around rollouts that never
-            # completed, and those were caused by crash-looping pods (no
-            # databases, missing /var/hsm), not by this command.
-            if ! oc rollout status deployment/$svc --timeout=5m; then
-              echo "::error::rollout failed for $svc"
-              oc describe deployment/$svc | tail -30
-              oc logs deployment/$svc --tail=80 --all-containers || true
-              # Events explain what logs cannot: image pull failures, SCC
-              # rejections, unschedulable pods.
-              oc get events --sort-by=.lastTimestamp | grep -i "$svc" | tail -20 || true
-              exit 1
-            fi
-            echo "::endgroup::"
           done
+
+      # Polls explicitly instead of using `oc rollout status`.
+      #
+      # `oc rollout status` hung indefinitely on "Waiting for deployment spec
+      # update to be observed" -- its --timeout applies to the watch, and a
+      # watch that stops delivering events never fires it. This loop has a
+      # hard wall-clock deadline it cannot miss, because it re-reads state
+      # every five seconds rather than waiting to be told.
+      #
+      # This restores the approach the workflow originally had. Replacing it
+      # with `oc rollout status` was a mistake: the hand-rolled version was
+      # not working around flaky rollouts, it was working around a client
+      # command that can hang.
+      - name: Wait for rollouts
+        run: |
+          set -uo pipefail
+          SERVICES="host-simulator ace-stub iso8583-adapter ledger-service
+                    auth-service risk-service transaction-service api-gateway"
+          DEADLINE=$(( SECONDS + 480 ))   # 8 minutes for the whole set
+          PENDING="$SERVICES"
+
+          while [ -n "${PENDING// /}" ] && [ "$SECONDS" -lt "$DEADLINE" ]; do
+            STILL=""
+            for svc in $PENDING; do
+              # jsonpath returns an empty string for absent fields, so every
+              # read is defaulted -- an unset readyReplicas is 0, not a
+              # syntax error in the arithmetic below.
+              gen=$(oc get deploy "$svc" -o jsonpath='{.metadata.generation}' 2>/dev/null || echo 0)
+              obs=$(oc get deploy "$svc" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || echo -1)
+              want=$(oc get deploy "$svc" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 1)
+              ready=$(oc get deploy "$svc" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)
+              updated=$(oc get deploy "$svc" -o jsonpath='{.status.updatedReplicas}' 2>/dev/null || echo 0)
+
+              if [ "$obs" = "$gen" ] && [ "${ready:-0}" = "$want" ] && [ "${updated:-0}" = "$want" ]; then
+                echo "  ready: $svc ($ready/$want)"
+              else
+                STILL="$STILL $svc"
+              fi
+            done
+            PENDING="$STILL"
+            [ -n "${PENDING// /}" ] && sleep 5
+          done
+
+          if [ -n "${PENDING// /}" ]; then
+            echo "::error::rollout did not complete for:$PENDING"
+            for svc in $PENDING; do
+              echo "::group::$svc diagnostics"
+              oc get deploy "$svc" -o wide || true
+              oc describe deploy "$svc" | tail -25 || true
+              oc get pods -l app.kubernetes.io/name="$svc" -o wide || true
+              # --previous shows why the PRIOR container died, which is the
+              # useful one once something has already restarted.
+              oc logs deploy/"$svc" --tail=60 --all-containers 2>/dev/null || true
+              oc logs deploy/"$svc" --tail=60 --previous 2>/dev/null || true
+              echo "::endgroup::"
+            done
+            echo "--- events ---"
+            oc get events --sort-by=.lastTimestamp | tail -30
+            exit 1
+          fi
+
+          echo "all deployments rolled out"
 
       # From the runner against the public Route, not via `oc exec` into a
       # pod. Simpler, and it exercises the same path a real client takes --
