@@ -28,3 +28,7 @@ hsm-base-key*
 
 # Working directory for make verify, scratch databases and service logs.
 .local-run/
+
+# jsdom, for the console UI test. Installed on demand, not vendored.
+node_modules/
+package-lock.json

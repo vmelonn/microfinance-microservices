@@ -74,7 +74,13 @@ class LedgerRepository:
                     -- across a service boundary, kept in step because only
                     -- registration writes it.
                     msisdn      TEXT,
-                    type        TEXT NOT NULL DEFAULT 'checking',
+                    -- Only two values, and only one of them carries
+                    -- logic: 'system' is what the solvency check reads to
+                    -- decide who may go below zero. 'wallet' is everyone
+                    -- else. It said 'checking' until an operator asked what
+                    -- that meant on a mobile money platform, which was a
+                    -- fair question with no good answer.
+                    type        TEXT NOT NULL DEFAULT 'wallet',
                     created_at  {ts} NOT NULL
                 )
             """)
@@ -121,6 +127,7 @@ class LedgerRepository:
             # the deployed one, killing the container at startup and
             # crashlooping the pod.
             self._migrate_add_msisdn(cur)
+            self._migrate_checking_to_wallet(cur)
 
             # Every transfer to a phone number hits this, so it is not
             # optional at any real volume.
@@ -160,6 +167,21 @@ class LedgerRepository:
                 f"{self.db.dialect} still reports it missing after the ALTER. "
                 "Everything below depends on it, so refusing to start."
             )
+
+    def _migrate_checking_to_wallet(self, cur) -> None:
+        """
+        Rows written before the rename still say 'checking'. A DEFAULT only
+        applies to new rows, so without this the console would show two
+        different words for the same kind of account and the older ones would
+        look like a distinct product.
+
+        Value-only, so it is safe to run repeatedly and needs no schema
+        inspection: after the first pass there is simply nothing to update.
+        """
+        cur.execute(
+            self.db.sql("UPDATE accounts SET type = ? WHERE type = ?"),
+            ("wallet", "checking"),
+        )
 
     def _account_columns(self, cur) -> set:
         """Column names on `accounts`, per dialect."""
@@ -209,7 +231,7 @@ class LedgerRepository:
 
     # -- identity -------------------------------------------------------------
 
-    def create_account(self, user_id: str, card_number: str, account_type: str = "checking",
+    def create_account(self, user_id: str, card_number: str, account_type: str = "wallet",
                        msisdn: str | None = None) -> dict:
         account_id = f"acc_{uuid.uuid4().hex[:12]}"
         now = utc_now_param()

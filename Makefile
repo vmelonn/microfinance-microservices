@@ -24,7 +24,7 @@ TESTED := ace-stub ledger-service
 
 .DEFAULT_GOAL := help
 .PHONY: help install test test-shared test-services lint up down logs smoke \
-        run verify scenarios scenarios-json build build-base deploy-dev deploy-prod clean wsdl \
+        run verify scenarios scenarios-json ui-test build build-base deploy-dev deploy-prod clean wsdl \
         oc-init oc-build oc-status oc-smoke
 
 help:
@@ -41,6 +41,7 @@ help:
 	@echo "                No Docker required."
 	@echo "  run           same, but leave it running on :18080"
 	@echo "  scenarios     drive 22 situations and record what each layer did"
+	@echo "  ui-test       drive the console in a real DOM (needs node + a running stack)"
 	@echo "  up            docker compose up --build (needs a container engine)"
 	@echo "  down          stop and remove containers"
 	@echo "  smoke         end-to-end purchase against a running compose stack"
@@ -94,6 +95,13 @@ run:
 # layer decided what. The recording is the source for the scenario gallery in
 # docs/architecture.html, so regenerate it after changing an ordering, a risk
 # threshold, or anything else a documented flow depends on.
+# The console, driven in a real DOM against a running stack. Needs node and
+# jsdom, and a platform already up (make run in another terminal). Not in the
+# CI matrix, which is Python only.
+ui-test:
+	@node services/api-gateway/tests/console_auth.test.mjs
+	@node services/api-gateway/tests/ui_flow.test.mjs
+
 scenarios:
 	@$(PY) scripts/scenarios.py
 

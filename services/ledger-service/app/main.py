@@ -93,7 +93,7 @@ async def adopt_correlation_id(request: Request, call_next):
 class CreateAccountRequest(BaseModel):
     user_id: str
     card_number: str = Field(..., min_length=12, max_length=19)
-    account_type: str = "checking"
+    account_type: str = "wallet"
     # Stored so a payee can be resolved by phone number, which is how anyone
     # actually sends money in a mobile wallet. Optional, because a merchant
     # account has no subscriber behind it.

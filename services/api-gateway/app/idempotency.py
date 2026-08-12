@@ -46,6 +46,19 @@ class IdempotencyStore(ABC):
         ...
 
     @abstractmethod
+    def release(self, key: str) -> None:
+        """
+        Drop a claim so the key can be used again.
+
+        ONLY for work that definitively did not happen. A claim exists to
+        stop a retry double-processing, so releasing one after something may
+        have reached the switch would trade a stuck key for a double charge,
+        which is far worse. See _release_on_definite_failure in main.py for
+        the rule the gateway applies.
+        """
+        ...
+
+    @abstractmethod
     def clear_all(self) -> None:
         """Sandbox/testing utility only, wipes every claim and cached response."""
         ...
@@ -86,6 +99,10 @@ class InMemoryIdempotencyStore(IdempotencyStore):
         with self._lock:
             if key in self._entries:
                 self._entries[key]["response"] = response
+
+    def release(self, key: str) -> None:
+        with self._lock:
+            self._entries.pop(key, None)
 
     def clear_all(self) -> None:
         with self._lock:
@@ -138,6 +155,13 @@ class RedisIdempotencyStore(IdempotencyStore):
 
     def store_response(self, key: str, response: dict) -> None:
         self._redis.set(self._response_key(key), json.dumps(response), ex=self._ttl)
+
+    def release(self, key: str) -> None:
+        # BOTH keys. The hash key is what SET NX guards, so leaving it would
+        # keep the claim; the response key should be absent anyway on a
+        # failure, and deleting it costs nothing and removes any chance of a
+        # stale response outliving the claim that produced it.
+        self._redis.delete(self._hash_key(key), self._response_key(key))
 
     def clear_all(self) -> None:
         # SCAN instead of KEYS, KEYS blocks the whole Redis server while it

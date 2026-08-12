@@ -162,6 +162,7 @@
       <div class="row">
         <button class="go" id="btn-register">Register new</button>
         <button class="go ghost" id="btn-login">Log in</button>
+        <button class="go ghost" id="btn-logout" hidden>Log out</button>
       </div>
       <dl class="kv" id="session-kv"></dl>
       <div class="note" id="merchant-note" hidden>
@@ -233,6 +234,10 @@
         <br><br>
         Spending more than you hold is declined <em>before</em> the switch is
         called, so there is no approved authorisation left to reverse.
+        <br><br>
+        A <strong>declined</strong> payment gets a fresh key automatically,
+        because your next press is a new attempt. An <strong>approved</strong>
+        one keeps its key, which is what makes the replay above visible.
       </div>
       <button class="go" id="btn-pay">Pay</button>
     </div>
@@ -282,6 +287,8 @@
 
 <!-- ============================ TRACE ============================ -->
 <section class="panel" data-tab="trace">
+  <div class="signin-note" id="auth-trace" hidden><span><strong>Sign in first.</strong> Everything on this tab reads live data through the gateway, which needs a token.</span><button type="button" class="goto-wallet">Go to the Wallet tab</button></div>
+
   <div class="grid" style="grid-template-columns:minmax(260px,1fr) minmax(420px,2.2fr)">
 
     <div class="card">
@@ -338,6 +345,13 @@
         Both are refused unless the environment permits them:
         <code>ALLOW_LEDGER_RESET=1</code> and <code>ALLOW_AUTH_PURGE=1</code>,
         set in dev and not in prod.
+      </div>
+      <div class="note" style="margin:.6rem 0 0">
+        The <code>type</code> column has two values.
+        <code>wallet</code> is a customer and may never go below zero.
+        <code>system</code> is <code>acc_system_funding</code>, where money
+        enters the platform, and it is negative by design: its balance is the
+        float customers are holding.
       </div>
       <div id="ledger-out" class="scroll" style="margin-top:.7rem"></div>
     </div>
@@ -405,7 +419,16 @@
 <script>
 "use strict";
 
-const S = { token:null, userId:null, card:null, msisdn:null, lastKey:null, lastCid:null, stop:false };
+const S = { token:null, userId:null, card:null, msisdn:null, lastKey:null, lastCid:null, stop:false,
+            // msisdn -> card, for wallets registered in THIS session.
+            //
+            // The API never hands out card numbers, so logging in cannot
+            // recover one. Without this, switching between two wallets means
+            // the second login leaves the card field empty and every money
+            // button refuses. Remembering what we ourselves minted is honest:
+            // it is not a lookup, it is not persisted, and a wallet created
+            // elsewhere is still unknown.
+            wallets: {} };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const cents = c => (c/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
@@ -437,14 +460,16 @@ function explain401(outputEl) {
 }
 
 function refreshAuthBanners() {
-  ["db", "load"].forEach(tab => {
+  ["db", "load", "trace"].forEach(tab => {
     const el = $("auth-" + tab);
     if (el) el.hidden = !!S.token;
   });
 }
 
 document.querySelectorAll(".goto-wallet").forEach(b => b.onclick = () => {
-  document.querySelector('nav.tabs button[data-tab="wallet"]').click();
+  // data-tab="app", not "wallet". The tab is LABELLED Wallet and identified
+  // as app, and targeting the label silently did nothing.
+  document.querySelector('nav.tabs button[data-tab="app"]').click();
 });
 
 // The card field, or null with an explanation in the right place.
@@ -499,8 +524,37 @@ function renderSession() {
   // The phone number, not usr_982fb38249aa. The UUID is a database key and
   // has no business being the thing a person reads.
   $("who").textContent = S.token ? `signed in ${S.msisdn||S.userId}` : "not signed in";
+
+  // Every control that depends on a session, updated from ONE place. When
+  // this was spread across handlers the tabs disagreed: the header said
+  // signed out while the Database tab still offered its buttons.
+  $("btn-logout").hidden = !S.token;
+  $("btn-login").hidden = !!S.token;
+  $("btn-register").hidden = !!S.token;
   refreshAuthBanners();
 }
+
+// One place that ends a session, so nothing is left behind. Clearing the
+// token alone would leave the previous holder's card in the field, and the
+// next purchase would spend from an account the operator is no longer
+// signed in as.
+function clearSession() {
+  S.token = null; S.userId = null; S.card = null; S.msisdn = null;
+  $("card").value = "";
+  $("balance").innerHTML = "";
+  $("session-kv").innerHTML = "";
+  renderSession();
+}
+
+$("btn-logout").onclick = () => {
+  clearSession();
+  $("result").innerHTML = '<p class="muted">Signed out. Log in with another '
+    + 'phone number to inspect a different wallet, or register a new one.</p>';
+  // The recipient list is read through an authenticated endpoint, so it goes
+  // stale the moment the session does.
+  const sel = $("peer-pick");
+  if (sel) sel.length = 1;
+};
 
 $("btn-register").onclick = async () => {
   // A random Pakistani mobile number when the field is blank, so the demo
@@ -513,6 +567,10 @@ $("btn-register").onclick = async () => {
     {full_name:"Console User", msisdn, bind_card_number:card, password:$("pw").value});
   if (r.status !== 200) return showResult(r);
   S.msisdn = r.data.msisdn || msisdn; S.card = card; $("card").value = card;
+  // Remember it against BOTH the typed and the stored form, since a later
+  // login may be typed either way and the two normalise to one subscriber.
+  S.wallets[msisdn] = card;
+  if (r.data.msisdn) S.wallets[r.data.msisdn] = card;
   await doLogin(msisdn);
 };
 
@@ -522,6 +580,16 @@ async function doLogin(msisdn) {
   const r = await api("POST","/auth/login",{msisdn, password:$("pw").value});
   if (r.status !== 200) return showResult(r);
   S.token = r.data.access_token; S.userId = r.data.user_id;
+  S.msisdn = r.data.msisdn || msisdn;
+
+  // Restore the card if this console minted it. Checked against both the
+  // typed and the normalised form: "03001234567" and "923001234567" are one
+  // subscriber, and a login typed the other way round would otherwise miss.
+  const known = S.wallets[msisdn] || S.wallets[S.msisdn];
+  if (known) { S.card = known; $("card").value = known; }
+  else { S.card = null; $("card").value = ""; }
+
+  $("balance").innerHTML = "";
   renderSession();
   checkMerchant();
   loadPeers();
@@ -556,6 +624,12 @@ $("btn-pay").onclick = async () => {
   });
   showResult(r, Math.round(performance.now()-t0));
   $("btn-pay").disabled = false;
+
+  // A new key unless the payment succeeded. See the note in the panel: an
+  // approved payment keeps its key so pressing Pay again demonstrates the
+  // cached reply, while a decline gets a fresh one because the next press is
+  // a new attempt, not a repeat of the old one.
+  if (r.status !== 200 || r.data.status !== "approved") newKey();
 };
 
 function showResult(r, ms) {

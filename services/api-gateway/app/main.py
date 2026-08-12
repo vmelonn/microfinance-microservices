@@ -298,6 +298,29 @@ def login(body: LoginRequest, request: Request):
 # Money
 # --------------------------------------------------------------------------
 
+def _release_on_definite_failure(state, key: str, exc: ServiceRejectedError):
+    """
+    Give a claimed idempotency key back after a downstream 4xx.
+
+    The asymmetry here is the whole point. Releasing when we should not means
+    a retry double-processes, and on the purchase path that is a second real
+    authorisation at the switch: money moves twice. Holding when we could
+    have released means the key is stuck until its TTL and the customer
+    starts a new one. The second is an annoyance; the first is an incident.
+
+    So the rule is narrow. A ServiceRejectedError is a 4xx: the service
+    understood the request and refused it, for an unregistered card, an
+    unregistered merchant, a card the caller does not own. Every one of those
+    is decided BEFORE the saga contacts the switch, so nothing happened.
+
+    ServiceCallError is never handled here. A timeout or a 5xx is exactly the
+    case where the switch may already hold an authorisation.
+    """
+    if 400 <= exc.status_code < 500:
+        state.idempotency.release(key)
+        log.info(f"released idempotency key after a {exc.status_code}, nothing happened")
+
+
 def _claim(state, key: str, body: BaseModel):
     """
     Atomic claim before any downstream work. Returns a cached response for a
@@ -349,12 +372,16 @@ def purchase(body: PurchaseRequest, request: Request, user: dict = Depends(curre
             retries=0,
         )
     except ServiceRejectedError as exc:
+        # Refused before the switch was contacted, so the key goes back.
+        # Without this a mistyped card locks that key for a full day.
+        _release_on_definite_failure(state, body.idempotency_key, exc)
         raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))
     except ServiceCallError as exc:
-        # Deliberately NOT cached. The outcome is unknown, and caching an
-        # error would make every retry of this key return the same error
-        # forever, even though the transaction may have succeeded, or may
-        # succeed on a genuine retry.
+        # Deliberately NOT cached, and the claim is deliberately HELD. The
+        # outcome is unknown, and caching an error would make every retry of
+        # this key return the same error forever, even though the
+        # transaction may have succeeded. Releasing would be worse still: a
+        # retry could authorise a second time.
         raise HTTPException(status_code=503, detail=f"Transaction service unavailable: {exc}")
 
     state.idempotency.store_response(body.idempotency_key, result)
@@ -394,8 +421,11 @@ def topup(body: TopupRequest, request: Request, user: dict = Depends(current_use
             retries=0,
         )
     except ServiceRejectedError as exc:
+        # Refused before anything happened, so the key goes back.
+        _release_on_definite_failure(state, body.idempotency_key, exc)
         raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))
     except ServiceCallError as exc:
+        # Claim HELD on purpose: the switch may already have authorised.
         raise HTTPException(status_code=503, detail=f"Transaction service unavailable: {exc}")
 
     state.idempotency.store_response(body.idempotency_key, result)
@@ -423,8 +453,11 @@ def transfer(body: TransferRequest, request: Request, user: dict = Depends(curre
             retries=0,
         )
     except ServiceRejectedError as exc:
+        # Refused before anything happened, so the key goes back.
+        _release_on_definite_failure(state, body.idempotency_key, exc)
         raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))
     except ServiceCallError as exc:
+        # Claim HELD on purpose: the switch may already have authorised.
         raise HTTPException(status_code=503, detail=f"Transaction service unavailable: {exc}")
 
     state.idempotency.store_response(body.idempotency_key, result)
