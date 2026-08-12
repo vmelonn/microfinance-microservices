@@ -142,3 +142,66 @@ def test_the_banner_is_hidden_by_default(script):
         marker = f'id="auth-{tab}"'
         element = html[html.index(marker):html.index(marker) + 260]
         assert "hidden" in element, f"the {tab} banner is not hidden initially"
+
+
+# ---------------------------------------------------------------------------
+# The card field
+#
+# Only Register fills it. The login response carries no card and no endpoint
+# exposes one, so signing in as an existing user legitimately leaves it
+# blank. Every money button reads that one input, and an empty one used to
+# reach the API and come back as a raw pydantic array or a bare 404.
+# ---------------------------------------------------------------------------
+
+MONEY_BUTTONS = ["btn-pay", "btn-topup", "btn-balance", "btn-send"]
+
+
+def test_no_money_button_sends_the_card_field_unchecked(script):
+    """
+    The regression: reading $("card").value directly inside a request body
+    instead of going through requireCard.
+    """
+    assert "function requireCard(" in script, "requireCard is missing"
+
+    offenders = []
+    for element, body in _handlers(script).items():
+        if "api(" not in body:
+            continue
+        # A READ, not a write. btn-register assigns to this field, which is
+        # exactly how it gets populated, and matching that was a false
+        # positive on the one handler doing the right thing. The lookahead
+        # skips `= x` while still catching `== x` and `=== x`.
+        reads_raw = re.search(r'\$\("card"\)\.value(?!\s*=[^=])', body)
+        if reads_raw and "requireCard(" not in body:
+            offenders.append(element)
+
+    assert not offenders, (
+        f"these buttons read the card field without requireCard: {offenders}. "
+        f"An empty field reaches the API and returns a validation array or a "
+        f"404 about a route, neither of which tells the operator anything."
+    )
+
+
+@pytest.mark.parametrize("element", MONEY_BUTTONS)
+def test_each_money_button_guards_the_card(script, element):
+    body = _handlers(script)[element]
+    assert "requireCard(" in body, f"{element} does not guard the card field"
+
+
+def test_the_guard_runs_before_the_request(script):
+    """A guard after the call would still send the empty value."""
+    for element in MONEY_BUTTONS:
+        body = _handlers(script)[element]
+        assert body.index("requireCard(") < body.index("api("), (
+            f"{element} calls the API before guarding the card field"
+        )
+
+
+def test_the_card_field_says_what_fills_it(script):
+    html = CONSOLE.read_text(encoding="utf-8")
+    field = html[html.index('<label for="card">'):]
+    field = field[:field.index("</div>") + 6]
+    assert "Register" in field, (
+        "the card field does not say that Register is what fills it, which is "
+        "the whole reason it is empty after a plain login"
+    )

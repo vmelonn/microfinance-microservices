@@ -201,7 +201,12 @@
     <div class="card">
       <h2>3. Pay</h2>
       <label for="card">Card number</label>
-      <input id="card" placeholder="register first">
+      <input id="card" placeholder="click Register above, or paste a card number">
+      <div class="note" style="margin:.4rem 0 0">
+        Filled in by <strong>Register</strong>. Logging in does not fill it:
+        that proves who you are, and the API deliberately never hands out card
+        numbers, so the console cannot look yours up.
+      </div>
       <div class="row">
         <div><label for="amt">Amount</label><input id="amt" type="number" step="0.01" value="25.50"></div>
         <div><label for="pin">PIN</label><input id="pin" value="1234" maxlength="12"></div>
@@ -434,6 +439,25 @@ document.querySelectorAll(".goto-wallet").forEach(b => b.onclick = () => {
   document.querySelector('nav.tabs button[data-tab="wallet"]').click();
 });
 
+// The card field, or null with an explanation in the right place.
+//
+// Every money button reads this one input, and an empty one used to reach
+// the API and come back as a pydantic validation array or a bare 404. The
+// field is only populated by Register, because the login response carries no
+// card and no endpoint exposes one, so signing in as an existing user
+// legitimately leaves it blank.
+function requireCard(outputEl) {
+  const card = $("card").value.trim();
+  if (card) return card;
+  const message = '<div class="err">No card in this session. '
+    + 'Click <strong>Register</strong> to create one, or paste an existing '
+    + 'card number into the card field.<br><br>'
+    + 'Logging in only proves who you are. It does not tell the console which '
+    + 'card you hold, and the API does not expose card numbers to look up.</div>';
+  if (outputEl) outputEl.innerHTML = message;
+  return null;
+}
+
 async function api(method, path, body) {
   const headers = {"Content-Type":"application/json"};
   if (S.token) headers.Authorization = `Bearer ${S.token}`;
@@ -511,11 +535,13 @@ $("btn-merchant").onclick = async () => {
 
 $("btn-pay").onclick = async () => {
   if (!S.token) return showResult({status:0, data:{detail:"Register or log in first."}});
+  const card = requireCard($("result"));
+  if (!card) return;
   $("btn-pay").disabled = true;
   const t0 = performance.now();
   const r = await api("POST","/transactions/purchase",{
     amount: parseFloat($("amt").value),
-    card_number: $("card").value.trim(),
+    card_number: card,
     pin: $("pin").value,
     idempotency_key: $("idem").value,
     entry_mode: $("entry").value,
@@ -560,11 +586,13 @@ newTuKey();
 
 $("btn-topup").onclick = async () => {
   if (!S.token) return showResult({status:0, data:{detail:"Register or log in first."}});
+  const card = requireCard($("result"));
+  if (!card) return;
   $("btn-topup").disabled = true;
   const t0 = performance.now();
   const r = await api("POST","/transactions/topup",{
     amount: parseFloat($("tu-amt").value),
-    card_number: $("card").value.trim(),
+    card_number: card,
     idempotency_key: $("tu-idem").value,
   });
   showResult(r, Math.round(performance.now()-t0));
@@ -642,12 +670,14 @@ $("peer-pick").onchange = () => { if ($("peer-pick").value) $("peer").value = $(
 
 $("btn-send").onclick = async () => {
   if (!S.token) return showResult({status:0, data:{detail:"Register or log in first."}});
+  const senderCard = requireCard($("result"));
+  if (!senderCard) return;
   if (!$("peer").value.trim()) return showResult({status:0, data:{detail:"Pick a recipient first."}});
   $("btn-send").disabled = true;
   const t0 = performance.now();
   const r = await api("POST","/transactions/transfer",{
     amount: parseFloat($("t-amt").value),
-    sender_card_number: $("card").value.trim(),
+    sender_card_number: senderCard,
     sender_pin: $("t-pin").value,
     recipient_account: $("peer").value.trim(),
     idempotency_key: $("t-idem").value,
@@ -657,7 +687,11 @@ $("btn-send").onclick = async () => {
 };
 
 $("btn-balance").onclick = async () => {
-  const r = await api("GET", `/accounts/${encodeURIComponent($("card").value.trim())}/balance`);
+  // Without the guard this requests /accounts//balance, and the router
+  // answers "Not Found" about a route rather than about a card.
+  const card = requireCard($("balance"));
+  if (!card) return;
+  const r = await api("GET", `/accounts/${encodeURIComponent(card)}/balance`);
   $("balance").innerHTML = r.status === 200
     ? `<dl class="kv"><dt>balance</dt><dd>${cents(r.data.balance_cents)}</dd>
        <dt>account</dt><dd>${esc(r.data.account_id)}</dd></dl>`
