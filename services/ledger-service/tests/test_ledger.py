@@ -441,3 +441,130 @@ def test_reset_returns_every_balance_to_zero(client, monkeypatch):
     # The card still resolves: accounts survive a reset, only postings go.
     assert client.post("/internal/ledger/resolve",
                        json={"identifier": "4111111111111111"}).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Upgrading an EXISTING database
+#
+# Every test above starts from an empty file, so they all exercise
+# CREATE TABLE. A deployed database never does: it was created by an earlier
+# release, it already holds rows, and CREATE TABLE IF NOT EXISTS is a no-op
+# against it. That gap is why a schema change can pass every test and then
+# crashloop on the cluster.
+# ---------------------------------------------------------------------------
+
+def _pre_msisdn_database(path):
+    """
+    The schema exactly as it shipped before phone numbers, with a customer
+    already in it.
+
+    Lifted verbatim from 18bb26e^ rather than written from memory. An earlier
+    version of this fixture invented a created_at column on ledger_entries
+    that never existed, and the resulting NOT NULL failure looked like a
+    product bug for several minutes. A fixture that claims to be a past
+    release has to actually be one.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE accounts (
+            account_id  TEXT PRIMARY KEY,
+            user_id     TEXT NOT NULL,
+            type        TEXT NOT NULL DEFAULT 'checking',
+            created_at  TIMESTAMP NOT NULL
+        );
+        CREATE TABLE cards (
+            card_number TEXT PRIMARY KEY,
+            account_id  TEXT NOT NULL REFERENCES accounts(account_id),
+            status      TEXT NOT NULL DEFAULT 'active'
+        );
+        CREATE TABLE transactions (
+            rrn           TEXT PRIMARY KEY,
+            amount_cents  BIGINT NOT NULL,
+            kind          TEXT NOT NULL DEFAULT 'purchase',
+            created_at    TIMESTAMP NOT NULL
+        );
+        CREATE TABLE ledger_entries (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            rrn          TEXT NOT NULL REFERENCES transactions(rrn),
+            account_id   TEXT NOT NULL REFERENCES accounts(account_id),
+            entry_type   TEXT NOT NULL CHECK (entry_type IN ('debit','credit')),
+            amount_cents BIGINT NOT NULL
+        );
+        CREATE INDEX idx_ledger_entries_account ON ledger_entries(account_id);
+        CREATE INDEX idx_cards_account ON cards(account_id);
+
+        INSERT INTO accounts VALUES
+            ('acc_legacy0001', 'usr_legacy', 'checking', '2026-01-01T00:00:00+00:00');
+        INSERT INTO cards VALUES ('4111222233334444', 'acc_legacy0001', 'active');
+    """)
+    conn.commit()
+    conn.close()
+
+
+def test_an_existing_database_upgrades_without_losing_anything(tmp_path):
+    """init_schema and ensure_system_accounts must both be safe to run
+    against a database that predates them."""
+    from app.repository import LedgerRepository
+
+    path = tmp_path / "legacy.db"
+    _pre_msisdn_database(str(path))
+
+    repo = LedgerRepository(Database(str(path)))
+    repo.init_schema()
+    repo.ensure_system_accounts()
+
+    # The legacy customer survived, still resolves by card, and has no number.
+    assert repo.resolve_account("4111222233334444") == "acc_legacy0001"
+    legacy = [a for a in repo.list_accounts() if a["account_id"] == "acc_legacy0001"]
+    assert legacy and legacy[0]["msisdn"] is None
+
+    # And the funding account was created alongside it.
+    assert repo.balance(repo.FUNDING_ACCOUNT) == 0
+
+
+def test_the_upgraded_database_can_take_a_topup_and_a_purchase(tmp_path):
+    """The upgrade is only real if money can move afterwards. This is the
+    path a deployed pod takes on its first request after a release."""
+    from app.repository import InsufficientFunds, LedgerRepository
+
+    path = tmp_path / "legacy.db"
+    _pre_msisdn_database(str(path))
+
+    repo = LedgerRepository(Database(str(path)))
+    repo.init_schema()
+    repo.ensure_system_accounts()
+
+    merchant = repo.create_account("usr_m", "merchant:demo")
+
+    with pytest.raises(InsufficientFunds):
+        repo.record_posting("rrnlegacy001", "acc_legacy0001",
+                            merchant["account_id"], 100)
+
+    repo.topup("acc_legacy0001", 5_000, "rrnlegacy002")
+    repo.record_posting("rrnlegacy003", "acc_legacy0001",
+                        merchant["account_id"], 2_000)
+
+    assert repo.balance("acc_legacy0001") == 3_000
+    assert repo.balance(repo.FUNDING_ACCOUNT) == -5_000
+    assert repo.is_balanced()
+
+
+def test_startup_is_idempotent_across_restarts(tmp_path):
+    """A pod restarts. init_schema and ensure_system_accounts run again, on a
+    database that now has everything. Running them twice must be a no-op, or
+    every restart after the first would crash the container."""
+    from app.repository import LedgerRepository
+
+    path = tmp_path / "restart.db"
+    _pre_msisdn_database(str(path))
+
+    for _ in range(3):
+        repo = LedgerRepository(Database(str(path)))
+        repo.init_schema()
+        repo.ensure_system_accounts()
+
+    funding = [a for a in repo.list_accounts()
+               if a["account_id"] == repo.FUNDING_ACCOUNT]
+    assert len(funding) == 1, "startup created the funding account more than once"

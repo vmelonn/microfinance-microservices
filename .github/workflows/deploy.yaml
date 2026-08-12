@@ -451,14 +451,27 @@ jobs:
           if [ -n "${PENDING// /}" ]; then
             echo "::error::rollout did not complete for:$PENDING"
             for svc in $PENDING; do
-              echo "::group::$svc diagnostics"
-              oc get deploy "$svc" -o wide || true
-              oc describe deploy "$svc" | tail -25 || true
-              oc get pods -l app.kubernetes.io/name="$svc" -o wide || true
+              # Deliberately NOT inside ::group::. A collapsed group is the
+              # right place for bulk context and the wrong place for the one
+              # line that explains the failure. A crashlooping ledger-service
+              # printed "no such column: msisdn" as its first log line, and
+              # it was folded away behind a summary that said nothing.
+              echo "::error::$svc did not roll out, container log follows"
+              echo "----- $svc, current container -----"
+              oc logs deploy/"$svc" --tail=60 --all-containers 2>/dev/null || true
               # --previous shows why the PRIOR container died, which is the
               # useful one once something has already restarted.
-              oc logs deploy/"$svc" --tail=60 --all-containers 2>/dev/null || true
-              oc logs deploy/"$svc" --tail=60 --previous 2>/dev/null || true
+              echo "----- $svc, previous container -----"
+              oc logs deploy/"$svc" --tail=60 --previous 2>/dev/null || echo "(none)"
+              # Waiting and terminated reasons name an ImagePullBackOff or a
+              # non-zero exit code that the log alone does not show.
+              echo "----- $svc, container states -----"
+              oc get pods -l app.kubernetes.io/name="$svc" -o wide || true
+              oc describe pods -l app.kubernetes.io/name="$svc" | grep -A3 -E "State:|Last State:|Reason:" || true
+
+              echo "::group::$svc, deployment detail"
+              oc get deploy "$svc" -o wide || true
+              oc describe deploy "$svc" | tail -25 || true
               echo "::endgroup::"
             done
             echo "--- events ---"

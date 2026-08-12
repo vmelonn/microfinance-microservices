@@ -111,12 +111,22 @@ class LedgerRepository:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cards_account ON cards(account_id)"
             )
+            # MIGRATIONS BEFORE INDEXES. Ordering, not style.
+            #
+            # CREATE TABLE IF NOT EXISTS is a no-op against a database that
+            # already exists, so on an upgraded database the msisdn column
+            # only exists once this migration has run. Creating the index
+            # first worked on every fresh database, which is every test and
+            # every local run, and raised "no such column: msisdn" against
+            # the deployed one, killing the container at startup and
+            # crashlooping the pod.
+            self._migrate_add_msisdn(cur)
+
             # Every transfer to a phone number hits this, so it is not
             # optional at any real volume.
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_accounts_msisdn ON accounts(msisdn)"
             )
-            self._migrate_add_msisdn(cur)
 
     def _migrate_add_msisdn(self, cur) -> None:
         """
