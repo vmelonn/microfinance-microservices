@@ -120,6 +120,15 @@
   .note{background:var(--accent-sunk);border-left:3px solid var(--accent);
         padding:.5rem .7rem;font-size:.78rem;margin-top:.7rem;color:var(--soft)}
   :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  /* Shown on tabs that need a session, whenever there isn't one. */
+  .signin-note{border-left:3px solid var(--warn);background:var(--warn-sunk);
+       color:var(--ink);padding:.7rem .9rem;margin:0 0 1rem;border-radius:3px;
+       display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+  .signin-note strong{font-weight:600}
+  .signin-note button{font-family:var(--mono);font-size:var(--step--1);
+       cursor:pointer;padding:.25rem .6rem;border-radius:3px;
+       border:1px solid var(--warn);background:none;color:var(--warn)}
 </style>
 </head>
 <body>
@@ -299,6 +308,8 @@
 
 <!-- ============================ DATABASE ============================ -->
 <section class="panel" data-tab="db">
+  <div class="signin-note" id="auth-db" hidden><span><strong>Sign in first.</strong> Everything on this tab reads live data through the gateway, which needs a token.</span><button type="button" class="goto-wallet">Go to the Wallet tab</button></div>
+
   <div class="grid" style="grid-template-columns:1fr">
 
     <div class="card">
@@ -339,6 +350,8 @@
 
 <!-- ============================ LOAD ============================ -->
 <section class="panel" data-tab="load">
+  <div class="signin-note" id="auth-load" hidden><span><strong>Sign in first.</strong> Everything on this tab reads live data through the gateway, which needs a token.</span><button type="button" class="goto-wallet">Go to the Wallet tab</button></div>
+
   <div class="grid" style="grid-template-columns:minmax(280px,1fr) minmax(420px,2fr)">
 
     <div class="card">
@@ -384,6 +397,43 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const cents = c => (c/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
 
+// True when there is no usable session, and it says so where the user is
+// looking. Returning the reason rather than a bare boolean keeps the wording
+// in one place.
+function signedOut(outputEl) {
+  if (S.token) return false;
+  if (outputEl) {
+    outputEl.innerHTML = '<p class="muted">Not signed in. Register or log in on '
+      + 'the <strong>Wallet</strong> tab, then come back.</p>';
+  }
+  refreshAuthBanners();
+  return true;
+}
+
+// A 401 from a console call means one of two things and the difference
+// matters: no token at all, or a token that has expired. The gateway issues
+// them with a one hour life, so an operator who left the tab open overnight
+// hits the second case and would otherwise see the same opaque object.
+function explain401(outputEl) {
+  const why = S.token
+    ? "Your session expired. Log in again on the <strong>Wallet</strong> tab."
+    : "Not signed in. Register or log in on the <strong>Wallet</strong> tab.";
+  if (outputEl) outputEl.innerHTML = `<p class="muted">${why}</p>`;
+  if (S.token) { S.token = null; renderSession(); }
+  refreshAuthBanners();
+}
+
+function refreshAuthBanners() {
+  ["db", "load"].forEach(tab => {
+    const el = $("auth-" + tab);
+    if (el) el.hidden = !!S.token;
+  });
+}
+
+document.querySelectorAll(".goto-wallet").forEach(b => b.onclick = () => {
+  document.querySelector('nav.tabs button[data-tab="wallet"]').click();
+});
+
 async function api(method, path, body) {
   const headers = {"Content-Type":"application/json"};
   if (S.token) headers.Authorization = `Bearer ${S.token}`;
@@ -417,6 +467,7 @@ function renderSession() {
   // The phone number, not usr_982fb38249aa. The UUID is a database key and
   // has no business being the thing a person reads.
   $("who").textContent = S.token ? `signed in ${S.msisdn||S.userId}` : "not signed in";
+  refreshAuthBanners();
 }
 
 $("btn-register").onclick = async () => {
@@ -616,6 +667,11 @@ $("btn-balance").onclick = async () => {
 /* --------------------------------- traces -------------------------------- */
 async function loadTraceList() {
   const r = await api("GET","/console/traces");
+  if (r.status === 401) {
+    $("trace-list").innerHTML = '<tr><td colspan="4" class="muted">'
+      + 'Sign in on the Wallet tab to see live traces.</td></tr>';
+    return;
+  }
   const rows = (r.data.traces || []);
   $("trace-list").innerHTML = rows.length ? rows.map(t =>
     `<tr style="cursor:pointer" onclick="jumpToTrace('${esc(t.correlation_id)}')">
@@ -659,7 +715,9 @@ function renderTable(el, cols, rows) {
 }
 
 $("btn-accounts").onclick = async () => {
+  if (signedOut($("ledger-out"))) return;
   const r = await api("GET","/console/ledger/accounts");
+  if (r.status === 401) return explain401($("ledger-out"));
   const rows = (r.data.accounts||[]).map(a => ({
     ...a,
     msisdn: phone(a.msisdn) || "(none)",
@@ -668,14 +726,21 @@ $("btn-accounts").onclick = async () => {
   renderTable($("ledger-out"), ["msisdn","balance","cards","type","account_id","created_at"], rows);
 };
 $("btn-txns").onclick = async () => {
+  if (signedOut($("ledger-out"))) return;
   const r = await api("GET","/console/ledger/transactions?limit=50");
+  if (r.status === 401) return explain401($("ledger-out"));
   const rows = (r.data.transactions||[]).map(t => ({...t, amount: cents(t.amount_cents)}));
   renderTable($("ledger-out"), ["rrn","amount","kind","debit_account_id","credit_account_id","created_at"], rows);
 };
 $("btn-reset").onclick = async () => {
+  // Checked BEFORE the confirm dialog. Asking someone to confirm an
+  // irreversible action and then refusing it on a technicality is a worse
+  // experience than not asking.
+  if (signedOut($("ledger-out"))) return;
   if (!confirm("Delete every transaction and ledger entry? Accounts and logins stay."))
     return;
   const r = await api("POST","/console/ledger/reset");
+  if (r.status === 401) return explain401($("ledger-out"));
   $("ledger-out").innerHTML = r.status === 200
     ? `<p class="muted">Ledger reset. Removed ${r.data.transactions_deleted} transactions `
       + `and ${r.data.entries_deleted} entries. Every balance is now zero.</p>`
@@ -683,7 +748,9 @@ $("btn-reset").onclick = async () => {
 };
 
 $("btn-integrity").onclick = async () => {
+  if (signedOut($("ledger-out"))) return;
   const r = await api("GET","/console/ledger/integrity");
+  if (r.status === 401) return explain401($("ledger-out"));
   const ok = r.data.balanced;
   $("ledger-out").innerHTML = `<div style="padding:.7rem">
     <span class="pill ${ok?"approved":"declined"}">${ok?"balances":"DOES NOT BALANCE"}</span>
@@ -692,8 +759,10 @@ $("btn-integrity").onclick = async () => {
 };
 
 $("btn-query").onclick = async () => {
+  if (signedOut($("query-out"))) return;
   $("btn-query").disabled = true;
   const r = await api("POST","/console/query",{sql:$("sql").value});
+  if (r.status === 401) { $("btn-query").disabled = false; return explain401($("query-out")); }
   if (r.status !== 200) {
     $("query-out").innerHTML = `<div class="err">${esc(r.data.detail || JSON.stringify(r.data))}</div>`;
   } else {
