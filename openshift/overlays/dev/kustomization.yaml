@@ -56,6 +56,15 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value: {name: ALLOW_LEDGER_RESET, value: "1"}
 
+  # The other half of a platform wipe. Separate flag from the ledger's
+  # because the two services own separate config and neither can read the
+  # other's, so a shared name would be a convention nothing enforces.
+  - target: {kind: Deployment, name: auth-service}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: ALLOW_AUTH_PURGE, value: "1"}
+
   # Ephemeral HSM key: swap the PVC for an emptyDir, keeping the mount.
   #
   # This previously REMOVED the volume and its mount, which was a bug. The

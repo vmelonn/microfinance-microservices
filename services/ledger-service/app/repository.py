@@ -526,6 +526,33 @@ class LedgerRepository:
                 for r in cur.fetchall()
             ]
 
+    def purge(self) -> dict:
+        """
+        Everything: postings, cards, accounts. Then the funding account is
+        recreated, because the service cannot take a top-up without it and a
+        wiped platform should be immediately usable rather than needing a
+        restart to become so.
+
+        Deletion order follows the foreign keys, children first. Postgres
+        would reject the reverse with a constraint violation, and SQLite has
+        `PRAGMA foreign_keys = ON` set in the dialect, so it would too.
+        """
+        with self.db.transaction() as conn:
+            cur = conn.cursor()
+            counts = {}
+            for table in ("ledger_entries", "transactions", "cards", "accounts"):
+                cur.execute(f"SELECT COUNT(*) FROM {table}")
+                counts[table] = int(cur.fetchone()[0])
+            for table in ("ledger_entries", "transactions", "cards", "accounts"):
+                cur.execute(f"DELETE FROM {table}")
+
+        # Outside the transaction above, so the wipe is committed before the
+        # funding account is written. Recreating it inside would make the
+        # whole thing one unit, and a failure there would silently roll the
+        # purge back while reporting counts that no longer happened.
+        self.ensure_system_accounts()
+        return counts
+
     def reset(self) -> dict:
         """
         Sandbox only. Wired to an endpoint that production config disables.

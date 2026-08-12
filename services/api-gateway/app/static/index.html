@@ -324,12 +324,20 @@
         <button class="go ghost" id="btn-txns">Transactions</button>
         <button class="go ghost" id="btn-integrity">Check it balances</button>
         <button class="go ghost danger" id="btn-reset">Reset ledger</button>
+        <button class="go ghost danger" id="btn-purge">Empty everything</button>
       </div>
       <div class="note">
-        Reset deletes every posting and returns all balances, including the
-        funding account, to zero. Accounts and logins survive. It is refused
-        unless <code>ALLOW_LEDGER_RESET=1</code>, which is set in dev and not
-        in prod.
+        <strong>Reset</strong> deletes every posting and returns all balances,
+        including the funding account, to zero. Accounts, cards and logins
+        survive, so you keep the wallet you are signed in as.
+        <br><br>
+        <strong>Empty everything</strong> also deletes accounts, cards and
+        users, across <em>both</em> databases. Nothing is left to log in as,
+        so you will need to register again. Type the confirmation to run it.
+        <br><br>
+        Both are refused unless the environment permits them:
+        <code>ALLOW_LEDGER_RESET=1</code> and <code>ALLOW_AUTH_PURGE=1</code>,
+        set in dev and not in prod.
       </div>
       <div id="ledger-out" class="scroll" style="margin-top:.7rem"></div>
     </div>
@@ -779,6 +787,44 @@ $("btn-reset").onclick = async () => {
     ? `<p class="muted">Ledger reset. Removed ${r.data.transactions_deleted} transactions `
       + `and ${r.data.entries_deleted} entries. Every balance is now zero.</p>`
     : `<p class="muted">${esc(JSON.stringify(r.data))}</p>`;
+};
+
+$("btn-purge").onclick = async () => {
+  if (signedOut($("ledger-out"))) return;
+  // A typed confirmation, not an OK button. This deletes the account you are
+  // signed in as, and every other one, across two databases. A single click
+  // is too cheap for that.
+  const typed = prompt(
+    'This deletes ALL accounts, cards, postings and users, in both databases.\n'
+    + 'You will be signed out and will need to register again.\n\n'
+    + 'Type EMPTY to confirm:');
+  if (typed !== "EMPTY") {
+    $("ledger-out").innerHTML = '<p class="muted">Cancelled, nothing was deleted.</p>';
+    return;
+  }
+
+  const r = await api("POST","/console/purge");
+  if (r.status === 401) return explain401($("ledger-out"));
+
+  if (r.status === 200) {
+    const led = r.data.ledger || {}, auth = r.data.auth || {};
+    $("ledger-out").innerHTML =
+      `<p class="muted">Platform emptied. Removed ${led.accounts ?? "?"} accounts, `
+      + `${led.cards ?? "?"} cards, ${led.transactions ?? "?"} transactions, `
+      + `${led.ledger_entries ?? "?"} entries and ${auth.users ?? "?"} users. `
+      + `The funding account has been recreated so a top-up works immediately.</p>`;
+    // The session belongs to a user who no longer exists. Clearing it here
+    // stops the header claiming a login that cannot do anything, and stops
+    // the card field offering a card that was just deleted.
+    S.token = null; S.card = null; S.msisdn = null; S.userId = null;
+    $("card").value = "";
+    renderSession();
+  } else {
+    // 207 means one half worked. Say which, because "failed" would be wrong.
+    const d = r.data.detail || r.data;
+    $("ledger-out").innerHTML = `<div class="err">${esc(d.message || JSON.stringify(d))}`
+      + `<br><br>Failed: ${esc((d.failed || []).join(", ") || "unknown")}</div>`;
+  }
 };
 
 $("btn-integrity").onclick = async () => {

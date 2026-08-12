@@ -151,6 +151,59 @@ def reset_ledger(request: Request):
     return result
 
 
+@router.post("/console/purge")
+def purge_platform(request: Request):
+    """
+    Empty the platform: accounts, cards, postings and users.
+
+    TWO services, two databases, and no distributed transaction across them.
+    Both halves are attempted regardless of what the first one does, and the
+    response reports each separately, because the useful question after a
+    partial failure is "which half" and a single ok/failed cannot answer it.
+
+    Attempting both rather than stopping at the first failure is deliberate.
+    The operator asked for an empty platform; getting them most of the way
+    there and naming what is left beats stopping early and leaving a state
+    they now have to work out for themselves. Both halves are idempotent, so
+    running it again is always safe and is the fix for any partial result.
+
+    Ledger first. If only one half lands, orphaned users who cannot reach
+    anything are a tidier state than accounts nobody can log in to, and the
+    error message can say so.
+    """
+    from mfcommon.http.client import ServiceCallError, ServiceRejectedError
+
+    outcome = {}
+    for name, client, path in (
+        ("ledger", request.app.state.ledger, "/internal/ledger/purge"),
+        ("auth", request.app.state.auth, "/internal/auth/purge"),
+    ):
+        try:
+            outcome[name] = {"ok": True, **client.post(path, {}, retries=0)}
+        except ServiceRejectedError as exc:
+            # Almost always the config gate: the flag is off in this
+            # environment. Say that rather than echoing a bare 403.
+            outcome[name] = {"ok": False, "status_code": exc.status_code,
+                             "error": str(exc.detail)}
+        except ServiceCallError as exc:
+            outcome[name] = {"ok": False, "error": f"{name}-service unreachable: {exc}"}
+
+    everything = all(part["ok"] for part in outcome.values())
+    log.warning(f"PLATFORM PURGE requested from the console: {outcome}")
+
+    if not everything:
+        failed = [n for n, part in outcome.items() if not part["ok"]]
+        raise HTTPException(status_code=207, detail={
+            "error": "partial_purge",
+            "failed": failed,
+            "message": ("The platform is now in a mixed state. Running this "
+                        "again is safe and is the fix."),
+            "detail": outcome,
+        })
+
+    return {"status": "purged", **outcome}
+
+
 def _ledger(request: Request, path: str):
     from mfcommon.http.client import ServiceCallError, ServiceRejectedError
 

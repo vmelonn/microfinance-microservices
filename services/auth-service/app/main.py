@@ -52,6 +52,8 @@ TOKEN_LIFETIME = int(os.environ.get("ACCESS_TOKEN_LIFETIME_SECONDS", "3600"))
 _DEV_SECRET = "dev-only-insecure-secret-do-not-use-in-production"
 JWT_SECRET = os.environ.get("JWT_SECRET", _DEV_SECRET)
 
+ALLOW_PURGE = os.environ.get("ALLOW_AUTH_PURGE", "0") == "1"
+
 TRACE_REDIS_URL = os.environ.get("REDIS_URL")
 
 log = configure_logging("auth-service", os.environ.get("LOG_LEVEL", "INFO"))
@@ -227,6 +229,38 @@ def delete_user(user_id: str, request: Request):
         conn.cursor().execute(db.sql("DELETE FROM users WHERE user_id = ?"), (user_id,))
     log.warning(f"compensating delete of user_id={user_id}")
     return {"status": "deleted", "user_id": user_id}
+
+
+@app.post("/internal/auth/purge")
+def purge_users(request: Request):
+    """
+    Delete every user. Half of a platform wipe; ledger-service does the
+    other half.
+
+    Gated by ALLOW_AUTH_PURGE, which is set only in the dev overlay. This is
+    a separate flag from the ledger's rather than a shared one because the
+    two services own separate config and neither can read the other's, so a
+    shared name would be a convention nothing enforces.
+
+    Tokens already issued keep working until they expire, which is inherent
+    to stateless JWTs: there is no session table to clear. A token whose user
+    no longer exists still authenticates, and every call it makes then fails
+    on a missing account. Introspection does not check the user still exists,
+    and making it do so would put a database read on the hot path of every
+    request to buy correctness in a case that only arises here.
+    """
+    if not ALLOW_PURGE:
+        raise HTTPException(status_code=403, detail="User purge is disabled in this environment.")
+
+    db: Database = request.app.state.db
+    with db.transaction() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users")
+        count = int(cur.fetchone()[0])
+        cur.execute("DELETE FROM users")
+
+    log.warning(f"ALL USERS PURGED via /internal/auth/purge: {count} rows")
+    return {"status": "purged", "users": count}
 
 
 @app.post("/internal/auth/login", response_model=TokenResponse)

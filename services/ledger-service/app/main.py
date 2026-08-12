@@ -273,6 +273,20 @@ def reset(request: Request):
     return {"status": "reset", **removed}
 
 
+@app.post("/internal/ledger/purge")
+def purge(request: Request):
+    """
+    Delete accounts and cards as well as postings. Same gate as reset,
+    because anything that can wipe the ledger is equally dangerous and a
+    second flag would just be one more thing to get wrong in prod config.
+    """
+    if not ALLOW_LEDGER_RESET_ENABLED():
+        raise HTTPException(status_code=403, detail="Ledger purge is disabled in this environment.")
+    removed = request.app.state.repo.purge()
+    log.warning(f"LEDGER PURGED via /internal/ledger/purge: {removed}")
+    return {"status": "purged", **removed}
+
+
 def ALLOW_LEDGER_RESET_ENABLED() -> bool:
     # Read through a function rather than the module constant so tests can
     # monkeypatch it without reimporting the module.

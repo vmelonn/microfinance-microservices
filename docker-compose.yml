@@ -153,6 +153,7 @@ services:
       dockerfile: services/auth-service/Dockerfile
     restart: unless-stopped
     environment:
+      ALLOW_AUTH_PURGE: "1"     # dev only; unset in every non-dev overlay
       <<: *common-env
       AUTH_DSN: postgresql://microfinance:${POSTGRES_PASSWORD:-dev-password}@postgres:5432/auth
     depends_on:

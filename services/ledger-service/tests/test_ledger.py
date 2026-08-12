@@ -669,3 +669,71 @@ def test_a_migration_that_silently_fails_refuses_to_start():
 
     with pytest.raises(RuntimeError, match="msisdn migration did not apply"):
         repo._migrate_add_msisdn(BrokenCursor({"account_id"}))
+
+
+# ---------------------------------------------------------------------------
+# Purge: emptying the platform, as opposed to zeroing it
+#
+# reset() deletes postings and keeps accounts, which is the right default and
+# is not what "start fresh" means. purge() also deletes cards and accounts,
+# and is half of a two-database operation, auth-service owning the other.
+# ---------------------------------------------------------------------------
+
+def test_purge_removes_accounts_and_cards_not_just_postings(repo, accounts):
+    alice, merchant = accounts
+    repo.record_posting("rrnpurge0001", alice["account_id"], merchant["account_id"], 500)
+
+    removed = repo.purge()
+
+    assert removed["accounts"] >= 2 and removed["cards"] >= 1
+    assert removed["transactions"] >= 1 and removed["ledger_entries"] >= 2
+    assert repo.list_accounts() == [] or [
+        a for a in repo.list_accounts() if a["type"] != "system"
+    ] == []
+    assert repo.export_since(None) == []
+    assert repo.resolve_account("4111111111111111") is None
+
+
+def test_purge_leaves_the_platform_immediately_usable(repo, accounts):
+    """
+    The funding account is recreated, so a top-up works straight away. Without
+    that, the first action after a wipe fails on a foreign key and the fix is
+    a pod restart, which is a miserable thing to discover.
+    """
+    repo.purge()
+
+    assert repo.balance(repo.FUNDING_ACCOUNT) == 0
+    bob = repo.create_account("usr_fresh", "4999888877776666")
+    repo.topup(bob["account_id"], 1_000, "rrnafterpurge")
+    assert repo.balance(bob["account_id"]) == 1_000
+    assert repo.is_balanced()
+
+
+def test_purge_deletes_children_before_parents(repo, accounts):
+    """
+    ledger_entries references both transactions and accounts, and cards
+    references accounts. Deleting accounts first would violate those
+    constraints on Postgres, and on SQLite too since the dialect sets
+    PRAGMA foreign_keys = ON. Reaching a clean state proves the order held.
+    """
+    alice, merchant = accounts
+    repo.record_posting("rrnfk00000001", alice["account_id"], merchant["account_id"], 100)
+
+    repo.purge()   # would raise on a constraint violation
+
+    assert repo.is_balanced()
+
+
+def test_purge_is_idempotent(repo, accounts):
+    """Running it twice is the documented fix for a partial wipe, so the
+    second run must not fail on an already-empty database."""
+    repo.purge()
+    second = repo.purge()
+    assert second["accounts"] == 1, "only the recreated funding account remains"
+
+
+def test_purge_is_refused_when_reset_is(client):
+    """One gate for both. Anything that can empty the ledger is as dangerous
+    as anything else that can, and a second flag is one more thing to get
+    wrong in production config."""
+    assert client.post("/internal/ledger/purge").status_code == 403
