@@ -74,6 +74,37 @@ starting api-gateway            :18080  ready
   PASS  total debits == total credits
 ```
 
+### Running the tests
+
+Nothing here runs inside the cluster. These are ordinary Python tests on a
+checkout, and the OpenShift web terminal is the wrong place for them: it has
+no repo and no dependencies.
+
+```bash
+make test        # every suite: shared, ace-stub, ledger-service
+make verify      # all 8 services as processes, full path, tear down
+```
+
+**On Windows use Git Bash for `make`.** GNU make hands recipes to cmd.exe
+there, which cannot run the per-service loop and fails with the memorable
+`svc was unexpected at this time`. To stay in PowerShell, call pytest
+directly instead:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest libs/mfcommon/tests tests -q
+
+$env:PYTHONPATH = "services/ledger-service"
+.\.venv\Scripts\python.exe -m pytest services/ledger-service/tests -q
+
+$env:PYTHONPATH = "services/ace-stub"
+$env:WSDL_PATH  = "ace/Iso8583Library/wsdl/Iso8583Gateway.wsdl"
+.\.venv\Scripts\python.exe -m pytest services/ace-stub/tests -q
+```
+
+Each service owns a top-level `app` package, so they cannot share a
+`sys.path`: two services' `app.main` would shadow each other. Hence one
+pytest run per service rather than one over the whole tree.
+
 ### Seeing what actually happens
 
 ```bash

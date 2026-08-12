@@ -30,6 +30,10 @@ TESTED := ace-stub ledger-service
 help:
 	@echo "microfinance-microservices"
 	@echo ""
+	@echo "  On Windows run these from Git Bash, not PowerShell. GNU make"
+	@echo "  hands recipes to cmd.exe there, which cannot run the shell"
+	@echo "  loops below and fails with 'svc was unexpected at this time'."
+	@echo ""
 	@echo "  install       create .venv and install mfcommon + dev deps"
 	@echo "  test          run every suite (shared + per-service)"
 	@echo "  verify        start all 8 services as processes, prove the"
