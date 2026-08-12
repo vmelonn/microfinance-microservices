@@ -138,18 +138,44 @@ class LedgerRepository:
         wrong account. Those customers can be paid by account ID or card until
         they re-register.
         """
+        if "msisdn" in self._account_columns(cur):
+            return
+
+        cur.execute("ALTER TABLE accounts ADD COLUMN msisdn TEXT")
+
+        # Re-READ the schema rather than assuming the ALTER did what it said.
+        # An earlier version added "msisdn" to the local set and then checked
+        # that set, which verifies a variable this method just mutated and
+        # can never fail.
+        #
+        # The failure this guards against is illegible without it: if column
+        # detection is ever wrong on some dialect, the next statement in
+        # init_schema is an index on this column, and the pod dies with
+        # `UndefinedColumn: column "msisdn" does not exist` pointing at a
+        # CREATE INDEX line that says nothing about the migration that was
+        # supposed to run first. That exact traceback cost a deploy cycle.
+        if "msisdn" not in self._account_columns(cur):
+            raise RuntimeError(
+                "the msisdn migration did not apply: column detection on "
+                f"{self.db.dialect} still reports it missing after the ALTER. "
+                "Everything below depends on it, so refusing to start."
+            )
+
+    def _account_columns(self, cur) -> set:
+        """Column names on `accounts`, per dialect."""
         if self.db.is_postgres:
+            # current_schema() matters. Without it this matches ANY schema
+            # holding a table called accounts, and the answer to "does the
+            # column exist" could come from a table this connection is never
+            # going to write to.
             cur.execute("""
                 SELECT column_name FROM information_schema.columns
-                WHERE table_name = 'accounts'
+                WHERE table_name = 'accounts' AND table_schema = current_schema()
             """)
-            columns = {r[0] for r in cur.fetchall()}
-        else:
-            cur.execute("PRAGMA table_info(accounts)")
-            columns = {r[1] for r in cur.fetchall()}
+            return {r[0] for r in cur.fetchall()}
 
-        if "msisdn" not in columns:
-            cur.execute("ALTER TABLE accounts ADD COLUMN msisdn TEXT")
+        cur.execute("PRAGMA table_info(accounts)")
+        return {r[1] for r in cur.fetchall()}
 
     # -- system accounts ------------------------------------------------------
 

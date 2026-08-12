@@ -568,3 +568,104 @@ def test_startup_is_idempotent_across_restarts(tmp_path):
     funding = [a for a in repo.list_accounts()
                if a["account_id"] == repo.FUNDING_ACCOUNT]
     assert len(funding) == 1, "startup created the funding account more than once"
+
+
+# ---------------------------------------------------------------------------
+# The Postgres branch of the migration
+#
+# The crash that took ledger-service down was Postgres-only, and the tests
+# proving the fix were SQLite-only. _migrate_add_msisdn takes a completely
+# different path per dialect, so passing on SQLite says nothing about the
+# path that actually runs in the cluster. A fake cursor exercises it without
+# needing a server.
+# ---------------------------------------------------------------------------
+
+class FakeCursor:
+    """Records SQL and answers information_schema with a fixed column set."""
+
+    def __init__(self, existing_columns):
+        self.existing = set(existing_columns)
+        self.executed = []
+        self._result = []
+
+    def execute(self, sql, params=None):
+        self.executed.append(" ".join(sql.split()))
+        if "information_schema.columns" in sql:
+            self._result = [(c,) for c in sorted(self.existing)]
+        elif sql.strip().upper().startswith("ALTER TABLE ACCOUNTS ADD COLUMN MSISDN"):
+            self.existing.add("msisdn")
+            self._result = []
+        else:
+            self._result = []
+
+    def fetchall(self):
+        return self._result
+
+
+class _PostgresLike:
+    """Just enough Database for the migration to take the Postgres branch."""
+    is_postgres = True
+    dialect = "postgresql"
+
+
+def _postgres_repo():
+    from app.repository import LedgerRepository
+
+    repo = LedgerRepository.__new__(LedgerRepository)
+    repo.db = _PostgresLike()
+    return repo
+
+
+def test_postgres_migration_adds_the_column_when_it_is_absent():
+    """The upgrade case: a database created before phone numbers existed."""
+    repo = _postgres_repo()
+    cur = FakeCursor({"account_id", "user_id", "type", "created_at"})
+
+    repo._migrate_add_msisdn(cur)
+
+    assert any("ALTER TABLE accounts ADD COLUMN msisdn" in s for s in cur.executed), \
+        cur.executed
+    assert "msisdn" in cur.existing
+
+
+def test_postgres_migration_is_a_no_op_when_the_column_exists():
+    """The restart case. Running it again must not attempt a second ALTER,
+    which Postgres would reject and which would crashloop every pod after the
+    first successful start."""
+    repo = _postgres_repo()
+    cur = FakeCursor({"account_id", "user_id", "msisdn", "type", "created_at"})
+
+    repo._migrate_add_msisdn(cur)
+
+    assert not any("ALTER TABLE" in s for s in cur.executed), cur.executed
+
+
+def test_postgres_column_lookup_is_scoped_to_the_current_schema():
+    """Without the scope, the answer to "does this column exist" can come
+    from a table in another schema that this connection never writes to."""
+    repo = _postgres_repo()
+    cur = FakeCursor({"account_id"})
+
+    repo._migrate_add_msisdn(cur)
+
+    lookup = next(s for s in cur.executed if "information_schema.columns" in s)
+    assert "table_schema = current_schema()" in lookup, lookup
+
+
+def test_a_migration_that_silently_fails_refuses_to_start():
+    """
+    The post-condition. If detection is ever wrong, the next statement in
+    init_schema is an index on the column, and the pod dies with
+    UndefinedColumn pointing at a CREATE INDEX line that says nothing about
+    the migration. This turns that into a sentence naming the real problem.
+    """
+    repo = _postgres_repo()
+
+    class BrokenCursor(FakeCursor):
+        def execute(self, sql, params=None):        # ALTER silently does nothing
+            self.executed.append(" ".join(sql.split()))
+            self._result = ([(c,) for c in sorted(self.existing)]
+                            if "information_schema.columns" in sql else [])
+
+    with pytest.raises(RuntimeError, match="msisdn migration did not apply"):
+        repo._migrate_add_msisdn(BrokenCursor({"account_id"}))
