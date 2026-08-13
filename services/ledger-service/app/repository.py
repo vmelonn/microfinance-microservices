@@ -307,6 +307,45 @@ class LedgerRepository:
 
             return None
 
+    def accounts_for_user(self, user_id: str) -> list[dict]:
+        """
+        Every account this user owns, with its cards and balance.
+
+        Keyed on user_id rather than on anything the caller supplies, which
+        is what makes it safe to return card numbers: there is no identifier
+        to tamper with.
+        """
+        with self.db.cursor() as cur:
+            cur.execute(self.db.sql("""
+                SELECT a.account_id, a.msisdn, a.type,
+                       COALESCE((
+                           SELECT SUM(CASE WHEN entry_type='credit' THEN amount_cents
+                                           ELSE -amount_cents END)
+                           FROM ledger_entries e WHERE e.account_id = a.account_id
+                       ), 0)
+                FROM accounts a
+                WHERE a.user_id = ?
+                ORDER BY a.created_at
+            """), (user_id,))
+            rows = cur.fetchall()
+
+            accounts = []
+            for account_id, msisdn, kind, balance in rows:
+                cur.execute(
+                    self.db.sql("SELECT card_number FROM cards "
+                                "WHERE account_id = ? AND status = 'active' "
+                                "ORDER BY card_number"),
+                    (account_id,),
+                )
+                accounts.append({
+                    "account_id": account_id,
+                    "msisdn": msisdn,
+                    "type": kind,
+                    "balance_cents": int(balance or 0),
+                    "cards": [r[0] for r in cur.fetchall()],
+                })
+        return accounts
+
     def owner_of(self, account_id: str) -> str | None:
         with self.db.cursor() as cur:
             cur.execute(

@@ -97,6 +97,18 @@ async function main() {
         !/Authorization header/.test(out1), out1.slice(0, 120));
   check("it names the Wallet tab", /Wallet/.test(out1), out1.slice(0, 120));
 
+  // Open the Live trace tab BEFORE signing in. That is the precondition for
+  // the defect: the list gets "Sign in on the Wallet tab" written into it,
+  // and nothing refreshed it afterwards. Without this step the check below
+  // passes whether or not the fix is present.
+  doc.querySelector('nav.tabs button[data-tab="trace"]').click();
+  await settle(600);
+  check("the trace tab asks for a sign-in while signed out",
+        /Sign in on the Wallet tab/.test(html($("trace-list"))),
+        html($("trace-list")).slice(0, 140));
+  doc.querySelector('nav.tabs button[data-tab="app"]').click();
+  await settle(150);
+
   // ------------------------------------------------------------------------
   section("2. register wallet A");
 
@@ -114,6 +126,19 @@ async function main() {
     check(`${tab} banner cleared by the login`, $("auth-" + tab).hidden === true,
           `hidden=${$("auth-" + tab).hidden}`);
   }
+
+  // The BANNER hiding is not the same as the tab looking signed in: the
+  // trace LIST is written when the tab is opened, and opening it signed out
+  // leaves "Sign in on the Wallet tab" in it. The old test asserted the
+  // banner attribute and passed while that sentence was still on screen.
+  //
+  // Checked WITHOUT re-clicking the tab. Switching to it reloads the list
+  // and would hide the defect; the case that matters is the stale content
+  // sitting there after a login, which only the refresh inside doLogin
+  // clears.
+  check("logging in refreshed the trace list, without revisiting the tab",
+        !/Sign in on the Wallet tab/.test(html($("trace-list"))),
+        html($("trace-list")).slice(0, 140));
 
   // ------------------------------------------------------------------------
   section("3. the console offers to create the missing merchant");
@@ -239,6 +264,19 @@ async function main() {
   check("the card came back", $("card").value === cardA,
         `expected ${cardA}, got ${$("card").value}`);
 
+  // From the PLATFORM, not from this page's memory. Wiping what the console
+  // remembers and logging in again is the case that actually failed for a
+  // customer who registered on another day: /users/me has to supply it.
+  window.eval("S.wallets = {}");
+  $("btn-logout").click();
+  await settle(200);
+  $("msisdn").value = phoneA;
+  $("btn-login").click();
+  await settle(1100);
+  check("a login with no local memory still finds the card",
+        $("card").value === cardA,
+        `expected ${cardA}, got ${$("card").value || "(empty)"}`);
+
   $("btn-balance").click();
   await settle(600);
   check("the balance survived the logout", /74\.50/.test(html($("balance"))),
@@ -356,6 +394,19 @@ async function main() {
       check("the PIN never reached the trace store", !/[">]1234[<"]/.test(timeline),
             "a PIN is visible in the trace");
     }
+
+    // Outside the cid block: the status reference is on the tab whether or
+    // not a trace loaded. It answers "what does 409 mean", and there are two
+    // different 409s that are handled oppositely.
+    const codes = html(doc.querySelector("table.codes"));
+    check("the status reference is on the tab", !!codes, "missing");
+    for (const code of ["200", "400", "401", "403", "404", "409", "422", "503"]) {
+      check(`the reference explains ${code}`, codes.includes(`>${code}<`),
+            `${code} is missing from the table`);
+    }
+    check("it distinguishes the two 409s",
+          codes.includes("insufficient_funds") && codes.includes("rrn_collision"),
+          "both 409s must be named, they are handled oppositely");
   }
 
   console.log(failures ? `\n${failures} UI check(s) FAILED` : "\nall UI checks passed");

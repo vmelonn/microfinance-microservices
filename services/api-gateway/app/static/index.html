@@ -146,6 +146,13 @@
   .trace-outcome{display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap;
        padding:.5rem .7rem;border:1px solid var(--rule);border-radius:3px;
        background:var(--surface-sunk);margin-bottom:.7rem}
+
+  /* The status reference. Tight, because it sits beside the trace list
+     rather than competing with it. */
+  table.codes td, table.codes th{padding:.3rem .5rem;vertical-align:top;
+       font-size:var(--step--1)}
+  table.codes td:first-child{white-space:nowrap}
+  table.codes .detail{display:block;margin-top:.15rem}
 </style>
 </head>
 <body>
@@ -311,8 +318,55 @@
     <div class="card">
       <h2>Recent requests</h2>
       <button class="go ghost" id="btn-refresh-traces">Refresh</button>
-      <div class="scroll" style="margin-top:.6rem;max-height:30rem">
+      <div class="scroll" style="margin-top:.6rem;max-height:22rem">
         <table><tbody id="trace-list"></tbody></table>
+      </div>
+
+      <h2 style="margin-top:1.2rem">What the status means</h2>
+      <div class="note">
+        Every code below is one this platform actually returns, and the
+        distinctions matter: two of them are 409 and they are handled
+        oppositely.
+      </div>
+      <div class="scroll">
+        <table class="codes">
+          <thead><tr><th>code</th><th>meaning here</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill approved">200</span></td>
+                <td>Handled. The <em>body</em> still says approved, declined,
+                    review, reversed or unknown, so a 200 is not by itself a
+                    payment.</td></tr>
+            <tr><td><span class="pill declined">400</span></td>
+                <td>An idempotency key reused with a <strong>different</strong>
+                    body. Returning the cached answer would answer the wrong
+                    question.</td></tr>
+            <tr><td><span class="pill declined">401</span></td>
+                <td>No token, or an expired one. They last an hour.</td></tr>
+            <tr><td><span class="pill declined">403</span></td>
+                <td>Authenticated, but not the owner of that card.</td></tr>
+            <tr><td><span class="pill declined">404</span></td>
+                <td>No such card, account or phone number.</td></tr>
+            <tr><td><span class="pill review">409</span>
+                    <span class="detail">insufficient_funds</span></td>
+                <td>The wallet cannot cover it. Retrying is pointless; top up
+                    first.</td></tr>
+            <tr><td><span class="pill review">409</span>
+                    <span class="detail">rrn_collision</span></td>
+                <td>That reference already belongs to another transaction.
+                    Retrying with a new one is correct, and top-ups do it
+                    automatically.</td></tr>
+            <tr><td><span class="pill review">409</span>
+                    <span class="detail">in progress</span></td>
+                <td>The same idempotency key is being processed right now.</td></tr>
+            <tr><td><span class="pill declined">422</span></td>
+                <td>The request is malformed, or names an account that does
+                    not exist.</td></tr>
+            <tr><td><span class="pill review">503</span></td>
+                <td>A dependency is down. Risk failing closed lands here, and
+                    so does an unreachable ledger. The outcome may be
+                    <strong>unknown</strong>, so do not blindly retry.</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -573,6 +627,7 @@ $("btn-logout").onclick = () => {
   // stale the moment the session does.
   const sel = $("peer-pick");
   if (sel) sel.length = 1;
+  loadTraceList();          // so it reverts to the signed-out message
 };
 
 $("btn-register").onclick = async () => {
@@ -601,17 +656,33 @@ async function doLogin(msisdn) {
   S.token = r.data.access_token; S.userId = r.data.user_id;
   S.msisdn = r.data.msisdn || msisdn;
 
-  // Restore the card if this console minted it. Checked against both the
-  // typed and the normalised form: "03001234567" and "923001234567" are one
-  // subscriber, and a login typed the other way round would otherwise miss.
-  const known = S.wallets[msisdn] || S.wallets[S.msisdn];
-  if (known) { S.card = known; $("card").value = known; }
-  else { S.card = null; $("card").value = ""; }
+  // Ask the platform what this customer holds. Until /users/me existed the
+  // console only knew wallets it had registered itself this session, so
+  // logging in as anyone else left the card field empty and every money
+  // button refused.
+  const mine = await api("GET", "/users/me");
+  const wallet = (mine.data.accounts || []).find(a => (a.cards || []).length);
+  if (wallet) {
+    S.card = wallet.cards[0];
+    S.accountId = wallet.account_id;
+    $("card").value = S.card;
+    S.wallets[S.msisdn] = S.card;
+  } else {
+    // A locally remembered card is the fallback, for the window between
+    // registering and the ledger having anything to report.
+    const known = S.wallets[msisdn] || S.wallets[S.msisdn];
+    S.card = known || null;
+    $("card").value = known || "";
+  }
 
   $("balance").innerHTML = "";
   renderSession();
   checkMerchant();
   loadPeers();
+  // The trace list may be holding a "sign in first" message written while
+  // signed out. Nothing else refreshes it, so it would sit there looking
+  // like the login had not worked.
+  loadTraceList();
 }
 
 async function checkMerchant() {

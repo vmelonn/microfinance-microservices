@@ -231,6 +231,16 @@ def topup(body: TopupRequest, request: Request):
     return result
 
 
+@app.get("/internal/ledger/users/{user_id}/accounts")
+def accounts_for_user(user_id: str, request: Request):
+    """
+    What this user owns. Internal, so the gateway is the one that decides the
+    caller really is this user; there is no Route to this service.
+    """
+    repo: LedgerRepository = request.app.state.repo
+    return {"user_id": user_id, "accounts": repo.accounts_for_user(user_id)}
+
+
 @app.get("/internal/ledger/accounts/{account_id}/balance")
 def balance(account_id: str, request: Request):
     repo: LedgerRepository = request.app.state.repo

@@ -471,6 +471,33 @@ def transfer(body: TransferRequest, request: Request, user: dict = Depends(curre
     return result
 
 
+@app.get("/users/me")
+def whoami(request: Request, user: dict = Depends(current_user)):
+    """
+    The caller's own wallet: account, phone number, balance and cards.
+
+    The user id comes from the TOKEN, never from the path or a query, so a
+    caller cannot ask about anyone else. That is what makes returning the
+    card number defensible: it is the same thing a banking app shows its own
+    cardholder, and the console needs the real number because a purchase puts
+    it in DE 2 of the ISO 8583 message.
+
+    Without this, logging in proved who you were and told you nothing about
+    what you held, so the console's card field stayed empty and every money
+    button refused.
+    """
+    state = request.app.state
+    try:
+        result = state.ledger.get(
+            f"/internal/ledger/users/{user['user_id']}/accounts", retries=2)
+    except ServiceRejectedError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))
+    except ServiceCallError as exc:
+        raise HTTPException(status_code=503, detail=f"Ledger unavailable: {exc}")
+
+    return {"user_id": user["user_id"], "accounts": result.get("accounts", [])}
+
+
 @app.get("/accounts/{identifier}/balance")
 def balance(identifier: str, request: Request, user: dict = Depends(current_user)):
     """identifier may be a card number or an account ID."""
