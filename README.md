@@ -10,7 +10,7 @@ root: wallet, live per-request tracing, a ledger browser, and a load test.
 
 > **Live console:** add your Route URL here after the first deploy, and to the
 > repository's **About → Website** field so it appears at the top of the page.
-> `https://api-gateway-<namespace>.<cluster>/`
+> `https://api-gateway-reemostat-dev.apps.rm2.thpm.p1.openshiftapps.com/`
 
 Full reference, including 22 scenarios recorded from the services' own logs:
 [docs/architecture.html](docs/architecture.html).
