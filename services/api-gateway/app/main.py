@@ -341,6 +341,13 @@ def _claim(state, key: str, body: BaseModel):
         trace.emit("gateway", "idempotent replay, returning cached response",
                    {"key": key}, level="warn")
         return outcome.cached_response
+    if outcome.status == "new":
+        # Traced because whether a request was CLAIMED or REPLAYED is the
+        # first fork in every money path, and it was the one step in the
+        # documented purchase flow with no evidence behind it: only the
+        # replay branch below emitted anything.
+        trace.emit("gateway", "idempotency key claimed", {"key": key})
+        return None
     if outcome.status == "in_progress":
         # A rare but genuine race: another request holds the claim and has
         # not finished. 409 rather than processing again.

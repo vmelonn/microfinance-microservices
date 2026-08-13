@@ -421,10 +421,90 @@ def verify() -> int:
     return 0
 
 
+def stop_stragglers() -> int:
+    """
+    Kill anything still listening on a service port.
+
+    WHY THIS EXISTS. run_local terminates its children in a finally block,
+    which covers Ctrl+C and a normal exit. It does NOT cover the parent being
+    killed outright, and `pkill -f run_local.py` does exactly that: the
+    script dies, the eight uvicorn children do not, and they keep their ports.
+
+    That is not a tidy-up nicety. A leftover service answers /health, so the
+    next run's uvicorn fails to bind, readiness passes against the ZOMBIE,
+    and the stack silently serves the previous build. Two debugging sessions
+    have been lost to it: once to a leaked risk-service that made an outage
+    scenario terminate a process that was not the one serving traffic, and
+    once to a full suite failing against a stale auth-service.
+    """
+    import socket
+
+    killed = []
+    for service in SERVICES:
+        port = service["port"]
+        probe = socket.socket()
+        probe.settimeout(0.3)
+        try:
+            probe.connect(("127.0.0.1", port))
+        except OSError:
+            continue          # nothing there, which is the normal case
+        finally:
+            probe.close()
+
+        for pid in _pids_on_port(port):
+            try:
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                                   capture_output=True, check=False)
+                else:
+                    os.kill(pid, signal.SIGKILL)
+                killed.append((service["name"], port, pid))
+            except Exception as exc:  # noqa: BLE001
+                print(f"  could not kill pid {pid} on :{port}: {exc}")
+
+    for name, port, pid in killed:
+        print(f"  killed {name} on :{port} (pid {pid})")
+    if not killed:
+        print("  nothing was listening, all ports free")
+    return 0
+
+
+def _pids_on_port(port: int) -> list[int]:
+    """PIDs listening on a port, per platform."""
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+                                 capture_output=True, text=True, check=False).stdout
+            pids = set()
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[0] == "TCP"                         and parts[1].endswith(f":{port}") and parts[3] == "LISTENING":
+                    pids.add(int(parts[4]))
+            return sorted(pids)
+
+        out = subprocess.run(["lsof", "-ti", f"tcp:{port}"],
+                             capture_output=True, text=True, check=False).stdout
+        return [int(x) for x in out.split()]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--verify", action="store_true", help="run the checks, then stop")
+    parser.add_argument("--stop", action="store_true",
+                        help="kill anything left listening on the service ports, "
+                             "then exit. Use this after a run was killed rather "
+                             "than stopped, which leaves the children behind.")
     args = parser.parse_args()
+
+    if args.stop:
+        return stop_stragglers()
+
+    # Refuse to start on top of a previous run. Binding would fail, but
+    # readiness would pass against the OLD process and the stack would serve
+    # the previous build while looking healthy.
+    stop_stragglers()
 
     STATE.mkdir(exist_ok=True)
     for stale in STATE.glob("*.db*"):

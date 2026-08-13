@@ -36,10 +36,15 @@ break a payment:
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 from mfcommon.observability.audit import mask_payload
 from mfcommon.observability.correlation import get_correlation_id
+
+# Separate from the service logger on purpose, so a deployment can turn the
+# trace stream up or down without touching application logging.
+_trace_log = logging.getLogger("trace")
 
 # Fifteen minutes. Long enough to inspect a transaction that just happened,
 # short enough that a load test does not fill Redis with dead traces.
@@ -76,10 +81,31 @@ def emit(stage: str, event: str, detail: dict | None = None, *, level: str = "in
     Deliberately returns None and raises nothing. Callers must never have to
     think about whether tracing worked.
     """
+    correlation_id = get_correlation_id()
+    payload = mask_payload(detail or {})
+
+    # ALWAYS log, whether or not Redis is configured.
+    #
+    # This used to return here when _redis was None, which meant every trace
+    # point in the platform disappeared in exactly the environments that have
+    # no Redis: local runs, CI, and any deployment where the cache is the
+    # thing that broke. A trace you lose while diagnosing infrastructure is
+    # not much of a trace.
+    #
+    # The shape is deliberately machine-readable. scripts/scenarios.py
+    # reconstructs the documented flows by grouping these lines on the
+    # correlation ID, so the flows in the architecture doc are what the
+    # platform did rather than what somebody remembered it doing.
+    _trace_log.log(
+        {"info": logging.INFO, "warn": logging.WARNING,
+         "error": logging.ERROR}.get(level, logging.INFO),
+        f"trace stage={stage} event={event}"
+        + (f" detail={json.dumps(payload, separators=(',', ':'), default=str)}"
+           if payload else ""),
+    )
+
     if _redis is None:
         return
-
-    correlation_id = get_correlation_id()
     if not correlation_id or correlation_id == "-":
         return
 
@@ -93,7 +119,7 @@ def emit(stage: str, event: str, detail: dict | None = None, *, level: str = "in
             # Masked here rather than at the display layer, so a PIN never
             # reaches Redis in the first place, the browser is not the only
             # thing that can read it.
-            "detail": mask_payload(detail or {}),
+            "detail": payload,
         }
 
         key = _key(correlation_id)

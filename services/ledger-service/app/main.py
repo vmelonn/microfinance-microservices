@@ -31,7 +31,7 @@ from mfcommon.observability.correlation import (
     set_correlation_id,
 )
 
-from app.repository import InsufficientFunds, LedgerRepository
+from app.repository import InsufficientFunds, LedgerRepository, RrnCollision
 
 LEDGER_DSN = os.environ.get("LEDGER_DSN", "ledger.db")
 ALLOW_RESET = os.environ.get("ALLOW_LEDGER_RESET", "0") == "1"
@@ -157,6 +157,17 @@ def create_posting(body: PostingRequest, request: Request):
             amount_cents=body.amount_cents,
             kind=body.kind,
         )
+    except RrnCollision as exc:
+        # 409 with a DIFFERENT error code from insufficient funds. The caller
+        # can retry a collision with a fresh RRN, which is never true of an
+        # overdraft, so the two must not look alike.
+        log.error(f"RRN COLLISION on {exc.rrn}: stored {exc.existing}, "
+                  f"attempted {exc.attempted}")
+        raise HTTPException(status_code=409, detail={
+            "error": "rrn_collision",
+            "rrn": exc.rrn,
+            "message": "This reference already belongs to a different transaction.",
+        })
     except InsufficientFunds as exc:
         # 409, not 422: the request is well formed and both accounts exist,
         # the debit side simply cannot cover it. A distinct status so callers
@@ -199,6 +210,12 @@ def topup(body: TopupRequest, request: Request):
     repo: LedgerRepository = request.app.state.repo
     try:
         result = repo.topup(body.account_id, body.amount_cents, body.rrn)
+    except RrnCollision as exc:
+        log.error(f"RRN COLLISION on a top-up, {exc.rrn}")
+        raise HTTPException(status_code=409, detail={
+            "error": "rrn_collision", "rrn": exc.rrn,
+            "message": "This reference already belongs to a different transaction.",
+        })
     except Exception as exc:
         log.error(f"topup failed rrn={body.rrn}: {exc!r}")
         raise HTTPException(status_code=422, detail=f"Top-up rejected: {exc}")

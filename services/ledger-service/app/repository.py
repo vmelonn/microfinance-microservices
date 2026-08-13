@@ -25,6 +25,26 @@ class AccountNotFound(Exception):
     pass
 
 
+class RrnCollision(Exception):
+    """
+    An RRN already exists, carrying DIFFERENT details.
+
+    Distinct from a duplicate, which is the idempotency guarantee working. A
+    collision is two unrelated transactions that happened to generate the
+    same reference, and reporting it as a replay tells the caller their money
+    moved when it did not.
+    """
+
+    def __init__(self, rrn: str, existing: dict, attempted: dict):
+        self.rrn = rrn
+        self.existing = existing
+        self.attempted = attempted
+        super().__init__(
+            f"RRN {rrn} already belongs to a different transaction: "
+            f"stored {existing}, attempted {attempted}"
+        )
+
+
 class InsufficientFunds(Exception):
     """
     The debit would take an account below zero.
@@ -354,10 +374,51 @@ class LedgerRepository:
                 )
         except Exception as exc:
             if self.db.is_unique_violation(exc, "transactions.rrn"):
+                # A duplicate RRN is one of two very different things, and
+                # the difference decides whether the caller may report
+                # success. A retry of the SAME posting is the idempotency
+                # guarantee working. A DIFFERENT posting that happened to
+                # generate the same reference is a collision, and calling
+                # that "already recorded" tells somebody their money moved
+                # when it did not.
+                attempted = {"amount_cents": amount_cents, "kind": kind,
+                             "debit": debit_account, "credit": credit_account}
+                existing = self._posting_details(rrn)
+                if existing is not None and existing != attempted:
+                    raise RrnCollision(rrn, existing, attempted) from exc
                 return {"status": "already_recorded", "rrn": rrn}
             raise
 
         return {"status": "recorded", "rrn": rrn, "amount_cents": amount_cents}
+
+    def _posting_details(self, rrn: str) -> dict | None:
+        """
+        What is already stored under this RRN, in the same shape as an
+        attempted posting so the two can be compared directly.
+
+        Returns None if the row cannot be read back, in which case the caller
+        treats it as a replay: refusing a posting because a diagnostic query
+        failed would turn a read problem into a payment failure.
+        """
+        try:
+            with self.db.cursor() as cur:
+                cur.execute(self.db.sql("""
+                    SELECT t.amount_cents, t.kind,
+                           MAX(CASE WHEN e.entry_type='debit'  THEN e.account_id END),
+                           MAX(CASE WHEN e.entry_type='credit' THEN e.account_id END)
+                    FROM transactions t
+                    LEFT JOIN ledger_entries e ON e.rrn = t.rrn
+                    WHERE t.rrn = ?
+                    GROUP BY t.amount_cents, t.kind
+                """), (rrn,))
+                row = cur.fetchone()
+        except Exception:  # noqa: BLE001
+            return None
+
+        if row is None:
+            return None
+        return {"amount_cents": int(row[0]), "kind": row[1],
+                "debit": row[2], "credit": row[3]}
 
     def _assert_solvent(self, cur, account_id: str, amount_cents: int) -> None:
         """

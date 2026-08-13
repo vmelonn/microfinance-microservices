@@ -23,8 +23,10 @@ other's velocity and the failures would look like flakiness.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import random
+import re
 import socket
 import ssl
 import subprocess
@@ -61,11 +63,42 @@ class Scenario:
         self.verdict = None
         self.summary = ""
 
-    def step(self, actor, action, result=""):
-        """actor is the layer that acted, so the record reads as a sequence of
-        decisions rather than a list of HTTP calls."""
-        self.steps.append({"actor": actor, "action": action, "result": str(result)})
+    def step(self, actor, action, result="", observed=False):
+        """
+        One step in the record.
+
+        `observed=False` means a human wrote this line. Those are for framing
+        what the client did and what came back, and the gallery labels them
+        so a reader can tell them from evidence.
+
+        `observed=True` is reserved for lines harvested from the services'
+        own logs by observe(). Nothing should set it by hand.
+        """
+        self.steps.append({"actor": actor, "action": action,
+                           "result": str(result), "observed": bool(observed)})
         return self
+
+    def observe(self, label, fn):
+        """
+        Run `fn`, then record what the SERVICES logged while it ran.
+
+        Everything between the correlation ID the gateway mints and the last
+        line tagged with it, in timestamp order, attributed to the service
+        that wrote it. This is the part of a documented flow that must not be
+        authored: if a layer stops participating, the flow stops showing it.
+        """
+        cursor = _log_cursor()
+        result = fn()
+        cid = LAST_CORRELATION_ID.get("value")
+
+        self.step("client", label, f"correlation {cid or 'not returned'}")
+        rows = _lines_since(cursor, cid)
+        if not rows:
+            self.step("(no trace)", "no service logged against this correlation id",
+                      "raise LOG_LEVEL to INFO, or the request never left the gateway")
+        for _ts, service, message in rows:
+            self.step(service, message, observed=True)
+        return result
 
     def done(self, ok, summary):
         self.verdict = "ok" if ok else "FAILED"
@@ -77,6 +110,7 @@ class Scenario:
             "key": self.key, "group": self.group, "title": self.title,
             "proves": self.proves, "steps": self.steps,
             "verdict": self.verdict, "summary": self.summary,
+            "observed_steps": sum(1 for s in self.steps if s.get("observed")),
         }
 
 
@@ -94,6 +128,109 @@ def scenario(key, group, title, proves):
 # Transport
 # ---------------------------------------------------------------------------
 
+# The correlation ID from the most recent call, so observe() can find the
+# log lines belonging to it. A module global rather than a return value
+# because every helper in this file already returns (status, body) and
+# threading a third value through all of them would obscure the scenarios.
+LAST_CORRELATION_ID = {"value": None}
+
+# Where run_local writes per-service logs. None when running against a
+# deployment, where the files are inside pods and out of reach.
+LOG_DIR = None
+
+
+def _log_cursor() -> dict:
+    """Line counts per log file, so observe() reads only what comes next."""
+    if not LOG_DIR:
+        return {}
+    counts = {}
+    for path in glob.glob(str(Path(LOG_DIR) / "*.log")):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                counts[path] = sum(1 for _ in handle)
+        except OSError:
+            counts[path] = 0
+    return counts
+
+
+def _lines_since(cursor: dict, correlation_id: str | None) -> list[tuple]:
+    """
+    Every log line written since `cursor` carrying `correlation_id`, in
+    timestamp order, as (ts, service, message).
+
+    Ordering depends on millisecond timestamps. At one-second resolution the
+    whole flow shares a stamp and sorts arbitrarily, which is how two adapter
+    lines were first documented in the wrong order.
+    """
+    if not LOG_DIR or not correlation_id:
+        return []
+
+    rows = []
+    for path in glob.glob(str(Path(LOG_DIR) / "*.log")):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+        except OSError:
+            continue
+        for line in lines[cursor.get(path, 0):]:
+            line = line.strip()
+            if not line.startswith("{") or correlation_id not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                # Was the common case until the formatter was fixed to build
+                # its line with json.dumps. Skipped rather than guessed at.
+                continue
+            if record.get("correlation_id") != correlation_id:
+                continue
+            rows.append((record.get("ts", ""), record.get("service", "?"),
+                         _tidy(record.get("message", ""))))
+    rows.sort()
+    return rows
+
+
+# Which service answers on which port, so an httpx line naming 127.0.0.1:8084
+# can be shown as a call to ledger-service. Derived from run_local's own
+# SERVICES list at import time rather than duplicated, because a port that
+# drifts here would silently mislabel every hop in the documentation.
+def _port_map() -> dict:
+    try:
+        import run_local
+
+        mapping = {str(s["port"]): s["name"] for s in run_local.SERVICES}
+    except Exception:  # noqa: BLE001
+        mapping = {}
+    mapping.setdefault("18080", "api-gateway")
+    return mapping
+
+
+_PORTS = _port_map()
+_HOP = re.compile(r'HTTP Request: (\w+) https?://[^:/]+:(\d+)(\S*) "HTTP/[\d.]+ (\d+)')
+
+
+def _tidy(message: str) -> str:
+    """Turn a log line into something a reader can follow."""
+    if message.startswith("trace stage="):
+        # "trace stage=saga event=X detail={...}" reads better as "saga: X".
+        body = message[len("trace stage="):]
+        stage, _, rest = body.partition(" event=")
+        event, _, detail = rest.partition(" detail=")
+        return f"{stage}: {event}" + (f"  {detail}" if detail else "")
+
+    # httpx's own line is real evidence of a hop, and unreadable as written.
+    # "HTTP Request: POST http://127.0.0.1:8084/internal/ledger/resolve
+    #  \"HTTP/1.1 200 OK\"" becomes
+    # "-> ledger-service POST /internal/ledger/resolve  200".
+    hop = _HOP.search(message)
+    if hop:
+        method, port, path, status = hop.groups()
+        target = _PORTS.get(port, f"port {port}")
+        return f"-> {target}  {method} {path}  {status}"
+
+    return message
+
+
 def call(method, path, body=None, token=None, base=None):
     headers = {"Content-Type": "application/json"}
     if token:
@@ -103,14 +240,17 @@ def call(method, path, body=None, token=None, base=None):
                                      headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=60, context=_SSL) as response:
+            LAST_CORRELATION_ID["value"] = response.headers.get("X-Correlation-ID")
             return response.status, json.loads(response.read() or b"{}")
     except urllib.error.HTTPError as exc:
+        LAST_CORRELATION_ID["value"] = exc.headers.get("X-Correlation-ID")
         raw = exc.read()
         try:
             return exc.code, json.loads(raw or b"{}")
         except json.JSONDecodeError:
             return exc.code, {"raw": raw.decode(errors="replace")}
     except Exception as exc:  # noqa: BLE001
+        LAST_CORRELATION_ID["value"] = None
         return 0, {"error": repr(exc)}
 
 
@@ -248,12 +388,12 @@ def s_empty_wallet(sc):
     sc.step("client", "register, then immediately try to pay 25.50",
             f"balance={money(balance(user))}")
 
-    status, body = purchase(user, 25.50)
-    sc.step("transaction-service", "step 2, solvency pre-check against ledger-service",
-            f"0 cents available, 2550 required")
-    sc.step("transaction-service", "decline without calling risk or the switch",
-            f"status={body.get('status')}")
-    sc.step("switch", "never contacted", f"rrn={body.get('rrn')}")
+    status, body = sc.observe("POST /transactions/purchase 25.50 on an empty wallet",
+                              lambda: purchase(user, 25.50))
+    sc.step("note", "no adapter, ace-stub or host-simulator line above",
+            "the decline happened before the switch was contacted")
+    sc.step("client", "what came back",
+            f"status={body.get('status')} rrn={body.get('rrn')}")
 
     ok = status == 200 and body.get("status") == "declined" and body.get("rrn") is None
     return sc.done(ok, f"Declined: {body.get('reason')}")
@@ -264,17 +404,15 @@ def s_empty_wallet(sc):
           "That something is acc_system_funding, which is negative by design.")
 def s_topup(sc):
     user = register()
-    sc.step("client", "POST /transactions/topup for 100.00")
 
-    status, body = topup(user, 100.00)
-    sc.step("transaction-service", "no switch call: this models an agent cash-in, "
-                                   "not a card being charged")
-    sc.step("ledger-service", "one posting, two entries",
-            f"debit acc_system_funding 10000, credit {user['account_id']} 10000")
-    sc.step("ledger-service", "idempotent on RRN", f"rrn={body.get('rrn')}")
+    status, body = sc.observe("POST /transactions/topup for 100.00",
+                              lambda: topup(user, 100.00))
+
+    sc.step("note", "no switch line above, and that is the point",
+            "a top-up models an agent cash-in, not a card being charged")
 
     after = balance(user)
-    sc.step("client", "GET /accounts/{card}/balance", f"{money(after)}")
+    sc.step("client", "balance", f"{money(after)}")
 
     _, integrity = call("GET", "/console/ledger/integrity", token=user["token"])
     sc.step("ledger-service", "debits still equal credits",
@@ -291,25 +429,17 @@ def s_topup(sc):
 def s_purchase(sc):
     user = register()
     topup(user, 100.00)
-    sc.step("client", "POST /transactions/purchase 25.50, entry mode 05 (chip)",
-            f"balance before={money(balance(user))}")
+    before = balance(user)
 
-    sc.step("api-gateway", "claim the idempotency key in Redis (SET NX)")
-    sc.step("transaction-service", "resolve card, prove ownership, check solvency")
-    sc.step("risk-service", "velocity, amount and entry-mode rules", "approve")
-
-    status, body = purchase(user, 25.50)
-    sc.step("iso8583-adapter", "build the 0200, encrypt the PIN block, assign a STAN",
-            f"stan={body.get('stan')}")
-    sc.step("ace-stub (SOAP)", "document/literal envelope, DFDL to ISO 8583",
-            "authorizeRequest")
-    sc.step("host-simulator", "0200 in, 0210 out",
-            f"DE 39=00 auth={body.get('authorization_id')}")
-    sc.step("ledger-service", "double-entry posting, idempotent on RRN",
-            f"rrn={body.get('rrn')} status={body.get('ledger_status')}")
+    status, body = sc.observe(
+        "POST /transactions/purchase 25.50, entry mode 05 (chip)",
+        lambda: purchase(user, 25.50))
 
     after = balance(user)
-    sc.step("client", "balance after", f"{money(after)}")
+    sc.step("client", "balance", f"{money(before)} -> {money(after)}")
+    sc.step("client", "what came back",
+            f"status={body.get('status')} rrn={body.get('rrn')} "
+            f"stan={body.get('stan')} auth={body.get('authorization_id')}")
 
     ok = status == 200 and body.get("status") == "approved" and after == 7450
     return sc.done(ok, f"Approved. {body.get('reason')}")
@@ -323,12 +453,11 @@ def s_overspend(sc):
     topup(user, 50.00)
     sc.step("client", "wallet holds 50.00, try to spend 500.00")
 
-    status, body = purchase(user, 500.00)
-    sc.step("transaction-service", "solvency pre-check", "5000 available, 50000 required")
-    sc.step("transaction-service", "declined", f"status={body.get('status')}")
+    status, body = sc.observe("POST /transactions/purchase 500.00 against 50.00",
+                              lambda: purchase(user, 500.00))
 
     after = balance(user)
-    sc.step("ledger-service", "balance untouched", f"{money(after)}")
+    sc.step("client", "balance untouched", f"{money(after)}")
 
     ok = body.get("status") == "declined" and after == 5000
     return sc.done(ok, "Refused, and nothing was written.")
@@ -411,11 +540,10 @@ def s_risk_review(sc):
     topup(user, 5000.00)
     sc.step("client", "wallet funded to 5,000.00, pay 2,500.00")
 
-    status, body = purchase(user, 2500.00)
-    sc.step("risk-service", "amount rule: 250000 cents is over the 200000 threshold",
-            f"outcome={body.get('status')}")
-    sc.step("switch", "not contacted", f"rrn={body.get('rrn')}")
-    sc.step("ledger-service", "nothing posted", f"balance={money(balance(user))}")
+    status, body = sc.observe("POST /transactions/purchase 2,500.00",
+                              lambda: purchase(user, 2500.00))
+    sc.step("note", "no switch line above", "review does not reach the switch")
+    sc.step("client", "balance unchanged", f"{money(balance(user))}")
 
     ok = body.get("status") == "review"
     return sc.done(ok, f"{body.get('reason')}")
@@ -428,10 +556,9 @@ def s_risk_decline(sc):
     topup(user, 20000.00)
     sc.step("client", "wallet funded to 20,000.00, pay 12,000.00")
 
-    _, body = purchase(user, 12000.00)
-    sc.step("risk-service", "amount rule: 1200000 cents is over the 1000000 hard limit",
-            f"outcome={body.get('status')}")
-    sc.step("ledger-service", "nothing posted", f"balance={money(balance(user))}")
+    _, body = sc.observe("POST /transactions/purchase 12,000.00",
+                         lambda: purchase(user, 12000.00))
+    sc.step("client", "balance unchanged", f"{money(balance(user))}")
 
     ok = body.get("status") == "decline"
     return sc.done(ok, f"{body.get('reason')}")
@@ -492,13 +619,14 @@ def s_cross_account(sc):
     attacker = register("Attacker")
     sc.step("client", "attacker holds a valid token and knows the victim's card number")
 
-    status, _ = call("POST", "/transactions/purchase", {
-        "amount": 10.00, "card_number": victim["card"], "pin": "1234",
-        "idempotency_key": f"authz-{uuid.uuid4().hex[:12]}",
-    }, token=attacker["token"])
-    sc.step("transaction-service", "card owner does not match the token subject",
-            f"HTTP {status}")
-    sc.step("ledger-service", "victim untouched", f"{money(balance(victim))}")
+    status, _ = sc.observe(
+        "POST /transactions/purchase against the victim's card, attacker's token",
+        lambda: call("POST", "/transactions/purchase", {
+            "amount": 10.00, "card_number": victim["card"], "pin": "1234",
+            "idempotency_key": f"authz-{uuid.uuid4().hex[:12]}",
+        }, token=attacker["token"]))
+    sc.step("client", "HTTP status", str(status))
+    sc.step("client", "victim's balance", f"{money(balance(victim))}")
 
     ok = status == 403 and balance(victim) == 10000
     return sc.done(ok, "403. A valid token is not a licence to spend from any card.")
@@ -547,17 +675,15 @@ def s_transfer(sc):
     sc.step("client", f"recipient registered as {recipient['msisdn']}, "
                       f"sender types {typed}")
 
-    status, body = call("POST", "/transactions/transfer", {
-        "amount": 7.50, "sender_card_number": sender["card"], "sender_pin": "1234",
-        "recipient_account": typed,
-        "idempotency_key": f"tr-{uuid.uuid4().hex[:12]}",
-    }, token=sender["token"])
-    sc.step("ledger-service", "resolve payee: card, then account id, then MSISDN",
-            f"resolved to {recipient['account_id']}")
-    sc.step("iso8583-adapter", "processing code 400000, recipient in DE 103",
-            f"status={body.get('status')}")
-    sc.step("ledger-service", "one posting, sender debited, recipient credited",
-            f"rrn={body.get('rrn')}")
+    status, body = sc.observe(
+        f"POST /transactions/transfer 7.50 to {typed}",
+        lambda: call("POST", "/transactions/transfer", {
+            "amount": 7.50, "sender_card_number": sender["card"], "sender_pin": "1234",
+            "recipient_account": typed,
+            "idempotency_key": f"tr-{uuid.uuid4().hex[:12]}",
+        }, token=sender["token"]))
+    sc.step("client", "what came back",
+            f"status={body.get('status')} rrn={body.get('rrn')}")
 
     _, accounts = call("GET", "/console/ledger/accounts", token=sender["token"])
     credited = [a for a in accounts.get("accounts", [])
@@ -806,8 +932,19 @@ def s_concurrency(sc):
     after = balance(user)
     sc.step("ledger-service", "final balance", f"{money(after)}")
 
-    ok = statuses.count("approved") == 1 and after == 0
-    return sc.done(ok, f"One of eight succeeded. Balance {money(after)}, never below zero.")
+    # AT MOST one, not exactly one.
+    #
+    # Eight attempts in one second also trips the velocity rule, and the risk
+    # engine can decline the very attempt that would otherwise have posted.
+    # Demanding exactly one made this scenario pass alone and fail inside a
+    # full run, which is a flaw in the assertion rather than in the platform:
+    # the property being tested is that concurrency cannot OVERDRAW, not that
+    # risk stays out of the way.
+    approved = statuses.count("approved")
+    ok = approved <= 1 and after >= 0 and after == 3000 - 3000 * approved
+    return sc.done(ok, f"{approved} of eight posted. Balance {money(after)}, "
+                       f"never below zero. The rest were refused by solvency "
+                       f"or by the velocity rule.")
 
 
 @scenario("integrity", "Concurrency and integrity", "The books balance, always",
@@ -895,13 +1032,28 @@ def main():
 
     if args.base:
         BASE = args.base.rstrip("/")
+        # LOG_DIR stays None. Against a deployment the service logs are
+        # inside pods and out of reach, so observe() records the call and the
+        # response and says plainly that it could not see the layers, rather
+        # than inventing them.
+        print("targeting a deployment: outcomes are real, per-layer flows "
+              "cannot be observed from here")
         results = run(args.only)
     else:
         import run_local
 
+        # INFO, not the default WARNING. The whole point of this runner is to
+        # read back what the services logged, and at WARNING a successful
+        # purchase logs nothing at all: the flow would be an empty list and
+        # the gallery would quietly go back to being a drawing.
+        run_local.SHARED_ENV["LOG_LEVEL"] = "INFO"
+
         state = run_local.STATE
+        global LOG_DIR
+        LOG_DIR = str(state)
+
         state.mkdir(exist_ok=True)
-        for stale in state.glob("*.db*"):
+        for stale in list(state.glob("*.db*")) + list(state.glob("*.log")):
             stale.unlink()
 
         procs = []

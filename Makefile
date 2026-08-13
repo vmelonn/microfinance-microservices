@@ -24,7 +24,7 @@ TESTED := ace-stub ledger-service
 
 .DEFAULT_GOAL := help
 .PHONY: help install test test-shared test-services lint up down logs smoke \
-        run verify scenarios scenarios-json ui-test build build-base deploy-dev deploy-prod clean wsdl \
+        run stop verify scenarios scenarios-json ui-test build build-base deploy-dev deploy-prod clean wsdl \
         oc-init oc-build oc-status oc-smoke
 
 help:
@@ -40,6 +40,7 @@ help:
 	@echo "                REST->SOAP->ISO 8583->REST path, tear down."
 	@echo "                No Docker required."
 	@echo "  run           same, but leave it running on :18080"
+	@echo "  stop          free the service ports after a run was killed"
 	@echo "  scenarios     drive 22 situations and record what each layer did"
 	@echo "  ui-test       drive the console in a real DOM (needs node + a running stack)"
 	@echo "  up            docker compose up --build (needs a container engine)"
@@ -90,6 +91,13 @@ verify:
 
 run:
 	@$(PY) scripts/run_local.py
+
+# For after a run was KILLED rather than stopped. run_local cleans up its own
+# children on Ctrl+C, but `pkill -f run_local.py` kills the parent and leaves
+# eight uvicorn processes holding their ports, which then answer /health and
+# make the next run serve the previous build.
+stop:
+	@$(PY) scripts/run_local.py --stop
 
 # Drives every situation the platform is built to handle and records which
 # layer decided what. The recording is the source for the scenario gallery in

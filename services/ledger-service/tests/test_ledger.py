@@ -737,3 +737,103 @@ def test_purge_is_refused_when_reset_is(client):
     as anything else that can, and a second flag is one more thing to get
     wrong in production config."""
     assert client.post("/internal/ledger/purge").status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# An RRN collision is not a replay
+#
+# The reference is ten digits of epoch seconds plus two random, so two
+# transactions in the same second collide once in a hundred. The ledger used
+# to answer "already_recorded" for both cases, and transaction-service passed
+# that through as approved, so a customer could be told "Wallet topped up"
+# while nothing moved. Caught as an intermittent scenario failure: a victim's
+# balance read 0.00 after a top-up that returned approved.
+# ---------------------------------------------------------------------------
+
+def test_a_genuine_retry_is_still_a_replay(repo, accounts):
+    """The idempotency guarantee, unchanged. Identical posting, same RRN."""
+    alice, merchant = accounts
+
+    first = repo.record_posting("rrnsame00001", alice["account_id"],
+                                merchant["account_id"], 2_500)
+    second = repo.record_posting("rrnsame00001", alice["account_id"],
+                                 merchant["account_id"], 2_500)
+
+    assert first["status"] == "recorded"
+    assert second["status"] == "already_recorded"
+
+
+def test_a_different_amount_on_the_same_rrn_is_a_collision(repo, accounts):
+    from app.repository import RrnCollision
+
+    alice, merchant = accounts
+    repo.record_posting("rrnclash0001", alice["account_id"],
+                        merchant["account_id"], 2_500)
+
+    with pytest.raises(RrnCollision):
+        repo.record_posting("rrnclash0001", alice["account_id"],
+                            merchant["account_id"], 9_900)
+
+
+def test_different_accounts_on_the_same_rrn_is_a_collision(repo, accounts):
+    """The case that actually bit: two unrelated top-ups in the same second."""
+    from app.repository import RrnCollision
+
+    alice, merchant = accounts
+    bob = repo.create_account("usr_bob", "4222222222222222")
+    repo.topup(alice["account_id"], 5_000, "rrnclash0002")
+
+    with pytest.raises(RrnCollision):
+        repo.topup(bob["account_id"], 5_000, "rrnclash0002")
+
+
+def test_a_collision_moves_no_money(repo, accounts):
+    """The refusal has to be total. A partial write would be worse than the
+    bug it replaces."""
+    from app.repository import RrnCollision
+
+    alice, merchant = accounts
+    bob = repo.create_account("usr_bob", "4222222222222222")
+    repo.topup(alice["account_id"], 5_000, "rrnclash0003")
+    before = repo.balance(bob["account_id"])
+
+    with pytest.raises(RrnCollision):
+        repo.topup(bob["account_id"], 5_000, "rrnclash0003")
+
+    assert repo.balance(bob["account_id"]) == before
+    assert repo.is_balanced()
+
+
+def test_the_collision_names_both_sides(repo, accounts):
+    """An operator reading this needs to know which transaction owns the
+    reference, not just that something clashed."""
+    from app.repository import RrnCollision
+
+    alice, merchant = accounts
+    repo.record_posting("rrnclash0004", alice["account_id"],
+                        merchant["account_id"], 2_500)
+
+    with pytest.raises(RrnCollision) as caught:
+        repo.record_posting("rrnclash0004", alice["account_id"],
+                            merchant["account_id"], 7_700)
+
+    assert caught.value.existing["amount_cents"] == 2_500
+    assert caught.value.attempted["amount_cents"] == 7_700
+
+
+def test_the_http_surface_separates_a_collision_from_an_overdraft(client):
+    """
+    Both are 409 and the caller treats them oppositely: retrying a collision
+    with a new reference is correct, retrying an overdraft is pointless. The
+    error code is what distinguishes them.
+    """
+    client.post("/internal/ledger/accounts", json={"user_id": "u1", "card_number": "4111111111111111"})
+    account = client.post("/internal/ledger/resolve", json={"identifier": "4111111111111111"}).json()
+    client.post("/internal/ledger/topup", json={
+        "rrn": "rrnhttpclash", "account_id": account["account_id"], "amount_cents": 5_000})
+
+    clash = client.post("/internal/ledger/topup", json={
+        "rrn": "rrnhttpclash", "account_id": account["account_id"], "amount_cents": 9_999})
+
+    assert clash.status_code == 409
+    assert clash.json()["detail"]["error"] == "rrn_collision"

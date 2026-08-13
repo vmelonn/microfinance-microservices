@@ -146,6 +146,18 @@ class TransactionResponse(BaseModel):
     requires_reconciliation: bool = False
 
 
+def _is_rrn_collision(exc) -> bool:
+    """
+    A 409 carrying error "rrn_collision", as opposed to the other 409 the
+    ledger returns, which is insufficient funds. Retrying a collision with a
+    new reference is correct; retrying an overdraft is pointless.
+    """
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        return detail.get("error") == "rrn_collision"
+    return "rrn_collision" in str(detail)
+
+
 def _generate_rrn() -> str:
     """
     12 characters: 10 digits of epoch seconds plus 2 random.
@@ -393,17 +405,38 @@ def topup(body: TopupRequest, request: Request):
     if sender.get("user_id") != body.user_id:
         raise HTTPException(status_code=403, detail="You are not authorized to use this card.")
 
-    rrn = _generate_rrn()
-    try:
-        result = state.ledger.post("/internal/ledger/topup", {
-            "rrn": rrn,
-            "account_id": sender["account_id"],
-            "amount_cents": body.amount_cents,
-        }, retries=3)   # idempotent on RRN, so retrying cannot double-credit
-    except ServiceRejectedError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))
-    except ServiceCallError as exc:
-        raise HTTPException(status_code=503, detail=f"Ledger unavailable: {exc}")
+    # Retried with a FRESH RRN on collision. The reference is ten digits of
+    # epoch seconds plus two random, so two transactions in the same second
+    # collide once in a hundred. A top-up touches no switch, so a second
+    # attempt cannot authorise anything twice, which makes retrying safe here
+    # in a way it would not be on the purchase path.
+    #
+    # Before the ledger learned to tell a collision from a replay, this
+    # returned "approved" with ledger_status "already_recorded" and moved no
+    # money at all.
+    result = last_error = None
+    for attempt in range(3):
+        rrn = _generate_rrn()
+        try:
+            result = state.ledger.post("/internal/ledger/topup", {
+                "rrn": rrn,
+                "account_id": sender["account_id"],
+                "amount_cents": body.amount_cents,
+            }, retries=3)   # idempotent on RRN, so retrying cannot double-credit
+            break
+        except ServiceRejectedError as exc:
+            if _is_rrn_collision(exc) and attempt < 2:
+                log.warning(f"RRN collision on {rrn}, retrying with a new reference")
+                last_error = exc
+                continue
+            raise HTTPException(status_code=exc.status_code, detail=str(exc.detail))
+        except ServiceCallError as exc:
+            raise HTTPException(status_code=503, detail=f"Ledger unavailable: {exc}")
+
+    if result is None:  # pragma: no cover - three collisions in a row
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not allocate a unique reference: {last_error}")
 
     log.info(f"topup rrn={rrn} amount_cents={body.amount_cents}")
     return TransactionResponse(status="approved", reason="Wallet topped up",

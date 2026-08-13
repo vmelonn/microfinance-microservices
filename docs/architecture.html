@@ -307,6 +307,15 @@
   /* Two columns of invariants, for the solvency section. */
   .pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
         gap:.8rem;margin:1rem 0}
+
+  /* An observed step is evidence: a service logged it. An unmarked one is
+     the client's own action, or a note. The difference is the whole point of
+     this section, so it is visible rather than described. */
+  ol.flow li.obs-row .who{color:var(--accent-2)}
+  ol.flow li.obs-row .who::after{content:" \25CF";font-size:.6em;
+       vertical-align:middle;opacity:.65}
+  .obs{font-family:var(--mono);font-size:.85em;color:var(--accent-2)}
+  .obs::after{content:" \25CF";font-size:.7em;vertical-align:middle;opacity:.65}
 </style>
 
 <div class="shell">
@@ -1203,38 +1212,70 @@ ISO8583_SOAP_ENDPOINT=http://ace:7800/Iso8583Gateway</code></pre>
     <section id="scenarios">
       <h2><span class="num">08</span>Scenarios</h2>
       <p class="lede">
-        Every flow below is a <strong>recording</strong>, not a drawing. It was
-        produced by running the platform.
+        Every flow below was produced by running the platform. The steps
+        marked <span class="obs">observed</span> are lines the services
+        themselves logged, matched on the correlation ID the gateway minted
+        for that request.
       </p>
 
+      <div class="note crit">
+        <span class="tag">What this section used to be</span>
+        <p>
+          It claimed to be a recording and was half of one. The outcomes were
+          real, but the per-layer steps were written by hand, and in the
+          purchase flow three of them ran <em>before</em> the request was
+          sent:
+        </p>
+        <pre><code>sc.step(<span class="s">"api-gateway"</span>, <span class="s">"claim the idempotency key"</span>)
+sc.step(<span class="s">"transaction-service"</span>, <span class="s">"resolve card, prove ownership"</span>)
+sc.step(<span class="s">"risk-service"</span>, <span class="s">"velocity, amount and entry-mode rules"</span>, <span class="s">"approve"</span>)
+
+status, body = purchase(user, <span class="k">25.50</span>)   <span class="c"># the call happens HERE</span></code></pre>
+        <p>
+          So the page asserted that risk-service approved a transaction that
+          had not been sent. Worse, one of those steps described work that
+          emits no evidence at all: a fresh idempotency claim was not traced,
+          only the replay branch was. If a layer had stopped participating,
+          the documentation would have gone on describing it.
+        </p>
+        <p>
+          Fixing it turned up two more defects. Log timestamps had
+          one-second resolution, so a five-service flow could not be ordered
+          and two adapter lines were first shown in the wrong order. And
+          <code>trace.emit</code> returned early when Redis was absent, so
+          every trace point vanished in exactly the environments that have no
+          Redis.
+        </p>
+      </div>
+
       <p>
-        <code>scripts/scenarios.py</code> boots all eight services, drives each
-        situation from outside exactly as a mobile client would, and records
-        which layer decided what, in order. This section is generated from that
-        recording, so a flow cannot drift away from the code: changing an
-        ordering changes the run, and regenerating produces the new sequence.
+        <code>scripts/scenarios.py</code> boots all eight services, drives
+        each situation from outside as a mobile client would, then reads back
+        every log line carrying that request's correlation ID. Regenerating
+        this section means re-running the platform, so a flow cannot drift
+        from the code.
       </p>
 
       <pre><code>python scripts/scenarios.py                  <span class="c"># boot, run, tear down</span>
-python scripts/scenarios.py --base $ROUTE    <span class="c"># against a live deployment</span>
+python scripts/scenarios.py --base $ROUTE    <span class="c"># outcomes only, pod logs are out of reach</span>
 python scripts/scenarios.py --only risk      <span class="c"># one group</span></code></pre>
 
       <div class="facts">
         <div class="fact"><b>22</b><span>scenarios</span></div>
-        <div class="fact"><b>90</b><span>recorded steps</span></div>
+        <div class="fact"><b>182</b><span>recorded steps</span></div>
+        <div class="fact"><b>101</b><span>from service logs</span></div>
         <div class="fact"><b>22 / 22</b><span>behaved as documented</span></div>
       </div>
 
       <div class="note">
-        <span class="tag">Why this is separate from the tests</span>
+        <span class="tag">Reading a flow</span>
         <p>
-          The test suites answer "is this correct" and are deliberately terse.
-          This answers "what happens, in what order, and who decided", which is
-          the part that is hard to recover from either the code or a passing
-          assertion. Each scenario is self-contained, with a fresh customer,
-          card and wallet, because the risk engine counts attempts per card in
-          a 60 second window and shared state between scenarios would look
-          exactly like flakiness.
+          <span class="obs">observed</span> lines are evidence: a service
+          logged that, in that order. <code>-&gt; service  METHOD /path
+          200</code> is one service calling another. <code>stage: event</code>
+          is a trace point the code places deliberately. Unmarked lines are
+          the client's own actions and the notes around them, which no
+          service could log.
         </p>
       </div>
 
@@ -1243,31 +1284,42 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>Registration is a two-service saga</h4>
           <span class="key">registration</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">auth-service and ledger-service must both succeed or neither does, and the phone number is normalised once on the way in.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">POST /users/register with msisdn typed as &#x27;0300 581 7070&#x27;</span></li>
-          <li><span class="who">api-gateway</span><span class="did">normalise MSISDN, then orchestrate two services<span class="got">HTTP 200</span></span></li>
-          <li><span class="who">auth-service</span><span class="did">create the user, hash the password (bcrypt)<span class="got">user_id=usr_def1554731f4</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">create the account and bind the card<span class="got">account_id=acc_e9abc838af78 balance=0.00</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">the stored identifier<span class="got">923005817070</span></span></li>
-          <li><span class="who">auth-service</span><span class="did">log in with the SAME number typed differently<span class="got">token issued</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /users/register with msisdn typed as &#x27;0300 371 2974&#x27;</span></li>
+          <li class=""><span class="who">api-gateway</span><span class="did">normalise MSISDN, then orchestrate two services<span class="got">HTTP 200</span></span></li>
+          <li class=""><span class="who">auth-service</span><span class="did">create the user, hash the password (bcrypt)<span class="got">user_id=usr_bd61c9d6b106</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">create the account and bind the card<span class="got">account_id=acc_7545000ab973 balance=0.00</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">the stored identifier<span class="got">923003712974</span></span></li>
+          <li class=""><span class="who">auth-service</span><span class="did">log in with the SAME number typed differently<span class="got">token issued</span></span></li>
         </ol>
-        <p class="outcome">One subscriber, one stored identifier 923005817070, reachable however it is typed.</p>
+        <p class="outcome">One subscriber, one stored identifier 923003712974, reachable however it is typed.</p>
       </div>
       <div class="scn">
         <header>
           <h4>A new wallet is empty and cannot spend</h4>
           <span class="key">empty-wallet</span>
+          <span class="key">9 observed</span>
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">Every account opens at zero. The decline happens before the switch is contacted, so no authorisation exists that would need reversing.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">register, then immediately try to pay 25.50<span class="got">balance=0.00</span></span></li>
-          <li><span class="who">transaction-service</span><span class="did">step 2, solvency pre-check against ledger-service<span class="got">0 cents available, 2550 required</span></span></li>
-          <li><span class="who">transaction-service</span><span class="did">decline without calling risk or the switch<span class="got">status=declined</span></span></li>
-          <li><span class="who">switch</span><span class="did">never contacted<span class="got">rrn=None</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">register, then immediately try to pay 25.50<span class="got">balance=0.00</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /transactions/purchase 25.50 on an empty wallet<span class="got">correlation cid-ed43b19abfd54a40</span></span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: POST /transactions/purchase  {&quot;client&quot;:&quot;127.0.0.1&quot;}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: idempotency key claimed  {&quot;key&quot;:&quot;sc-e2ad10a45c11&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  GET /internal/ledger/accounts/acc_514832f9cf40/balance  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">insufficient funds for ...7408, declining early</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">saga: declined: insufficient funds, the switch was never called  {&quot;amount_cents&quot;:2550}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">-&gt; transaction-service  POST /internal/transactions/purchase  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: responded 200  {&quot;status&quot;:200}</span></li>
+          <li class=""><span class="who">note</span><span class="did">no adapter, ace-stub or host-simulator line above<span class="got">the decline happened before the switch was contacted</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">what came back<span class="got">status=declined rrn=None</span></span></li>
         </ol>
         <p class="outcome">Declined: Insufficient funds. Top up your wallet and try again.</p>
       </div>
@@ -1275,16 +1327,23 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>Money enters through the funding account</h4>
           <span class="key">topup</span>
+          <span class="key">8 observed</span>
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">Double-entry means crediting a customer requires debiting something. That something is acc_system_funding, which is negative by design.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">POST /transactions/topup for 100.00</span></li>
-          <li><span class="who">transaction-service</span><span class="did">no switch call: this models an agent cash-in, not a card being charged</span></li>
-          <li><span class="who">ledger-service</span><span class="did">one posting, two entries<span class="got">debit acc_system_funding 10000, credit acc_3ca946a8bb3e 10000</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">idempotent on RRN<span class="got">rrn=178645525860</span></span></li>
-          <li><span class="who">client</span><span class="did">GET /accounts/{card}/balance<span class="got">100.00</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">debits still equal credits<span class="got">balanced=True</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /transactions/topup for 100.00<span class="got">correlation cid-dd45aa6305734767</span></span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: POST /transactions/topup  {&quot;client&quot;:&quot;127.0.0.1&quot;}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: idempotency key claimed  {&quot;key&quot;:&quot;tu-45df255f6d6b&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">ledger-service</span><span class="did">topup rrn=178660110832 account=acc_d05db63d6307 amount_cents=10000 status=recorded</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/topup  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">topup rrn=178660110832 amount_cents=10000</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">-&gt; transaction-service  POST /internal/transactions/topup  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: responded 200  {&quot;status&quot;:200}</span></li>
+          <li class=""><span class="who">note</span><span class="did">no switch line above, and that is the point<span class="got">a top-up models an agent cash-in, not a card being charged</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">balance<span class="got">100.00</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">debits still equal credits<span class="got">balanced=True</span></span></li>
         </ol>
         <p class="outcome">Wallet at 100.00. The funding account is now 100.00 negative, which is the float this customer holds.</p>
       </div>
@@ -1292,19 +1351,38 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>A purchase, all the way down and back</h4>
           <span class="key">purchase</span>
+          <span class="key">24 observed</span>
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">REST into the gateway, SOAP to the ISO 8583 gateway, BCD-packed binary over a socket to the switch, and the same path in reverse.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">POST /transactions/purchase 25.50, entry mode 05 (chip)<span class="got">balance before=100.00</span></span></li>
-          <li><span class="who">api-gateway</span><span class="did">claim the idempotency key in Redis (SET NX)</span></li>
-          <li><span class="who">transaction-service</span><span class="did">resolve card, prove ownership, check solvency</span></li>
-          <li><span class="who">risk-service</span><span class="did">velocity, amount and entry-mode rules<span class="got">approve</span></span></li>
-          <li><span class="who">iso8583-adapter</span><span class="did">build the 0200, encrypt the PIN block, assign a STAN<span class="got">stan=000008</span></span></li>
-          <li><span class="who">ace-stub (SOAP)</span><span class="did">document/literal envelope, DFDL to ISO 8583<span class="got">authorizeRequest</span></span></li>
-          <li><span class="who">host-simulator</span><span class="did">0200 in, 0210 out<span class="got">DE 39=00 auth=A18008</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">double-entry posting, idempotent on RRN<span class="got">rrn=178645525810 status=recorded</span></span></li>
-          <li><span class="who">client</span><span class="did">balance after<span class="got">74.50</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /transactions/purchase 25.50, entry mode 05 (chip)<span class="got">correlation cid-20fc13c1a1ce498c</span></span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: POST /transactions/purchase  {&quot;client&quot;:&quot;127.0.0.1&quot;}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: idempotency key claimed  {&quot;key&quot;:&quot;sc-14c629d7869b&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  GET /internal/ledger/accounts/acc_4898cfa55cf0/balance  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; risk-service  POST /internal/risk/evaluate  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">risk: risk decision: approve  {&quot;reasons&quot;:[]}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">saga: RRN generated, entering the point of no return  {&quot;rrn&quot;:&quot;178660110967&quot;}</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">authorize rrn=178660110967 card=...6505 amount_cents=2550 pin_present=True</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">security: PIN block built  {&quot;ksn&quot;:&quot;&lt;redacted&gt;&quot;,&quot;algorithm&quot;:&quot;ISO 9564 format 0&quot;}</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">soap: SOAP authorizeRequest to the ISO 8583 gateway  {&quot;endpoint&quot;:&quot;http://127.0.0.1:8090/Iso8583Gateway&quot;,&quot;rrn&quot;:&quot;178660110967&quot;}</span></li>
+          <li class="obs-row"><span class="who">ace-stub</span><span class="did">iso8583: built MTI 0200, sending to the switch  {&quot;mti&quot;:&quot;0200&quot;,&quot;data_elements&quot;:[2,3,4,22,37,49,52,53]}</span></li>
+          <li class="obs-row"><span class="who">ace-stub</span><span class="did">authorizeRequest -&gt; MTI 0200 fields={2: &#x27;...6505&#x27;, 3: &#x27;000000&#x27;, 4: &#x27;000000002550&#x27;, 22: &#x27;05&#x27;, 37: &#x27;178660110967&#x27;, 49: &#x27;840&#x27;, 52: &#x27;&lt;redacted&gt;&#x27;, 53: &#x27;&lt;redacted&gt;&#x27;}</span></li>
+          <li class="obs-row"><span class="who">ace-stub</span><span class="did">authorizeRequest &lt;- MTI 0210 fields={11: &#x27;000007&#x27;, 37: &#x27;178660110967&#x27;, 38: &#x27;A18008&#x27;, 39: &#x27;00&#x27;}</span></li>
+          <li class="obs-row"><span class="who">ace-stub</span><span class="did">switch: switch answered MTI 0210  {&quot;mti&quot;:&quot;0210&quot;,&quot;de39&quot;:&quot;00&quot;,&quot;de38&quot;:&quot;A18008&quot;}</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">-&gt; ace-stub  POST /Iso8583Gateway  200</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">authorize rrn=178660110967 -&gt; approved (00 Approved / completed successfully)</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">soap: SOAP response: approved  {&quot;de39&quot;:&quot;00&quot;,&quot;text&quot;:&quot;Approved / completed successfully&quot;,&quot;authId&quot;:&quot;A18008&quot;,&quot;stan&quot;:&quot;000007&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; iso8583-adapter  POST /internal/iso8583/authorize  200</span></li>
+          <li class="obs-row"><span class="who">ledger-service</span><span class="did">ledger: double-entry posting: recorded  {&quot;rrn&quot;:&quot;178660110967&quot;,&quot;amount_cents&quot;:2550,&quot;debit&quot;:&quot;acc_4898cfa55cf0&quot;,&quot;credit&quot;:&quot;acc_cab2bc716003&quot;}</span></li>
+          <li class="obs-row"><span class="who">ledger-service</span><span class="did">posting rrn=178660110967 status=recorded amount_cents=2550</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/postings  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">-&gt; transaction-service  POST /internal/transactions/purchase  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: responded 200  {&quot;status&quot;:200}</span></li>
+          <li class=""><span class="who">client</span><span class="did">balance<span class="got">100.00 -&gt; 74.50</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">what came back<span class="got">status=approved rrn=178660110967 stan=000007 auth=A18008</span></span></li>
         </ol>
         <p class="outcome">Approved. Approved / completed successfully</p>
       </div>
@@ -1312,14 +1390,23 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>Spending more than you hold is refused</h4>
           <span class="key">overspend</span>
+          <span class="key">9 observed</span>
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">The ledger is the authority. The pre-check is only there to stop an unaffordable transaction reaching the switch.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">wallet holds 50.00, try to spend 500.00</span></li>
-          <li><span class="who">transaction-service</span><span class="did">solvency pre-check<span class="got">5000 available, 50000 required</span></span></li>
-          <li><span class="who">transaction-service</span><span class="did">declined<span class="got">status=declined</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">balance untouched<span class="got">50.00</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">wallet holds 50.00, try to spend 500.00</span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /transactions/purchase 500.00 against 50.00<span class="got">correlation cid-baa55906196a413a</span></span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: POST /transactions/purchase  {&quot;client&quot;:&quot;127.0.0.1&quot;}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: idempotency key claimed  {&quot;key&quot;:&quot;sc-c4a413a67045&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  GET /internal/ledger/accounts/acc_ce6a4135cdd6/balance  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">insufficient funds for ...8122, declining early</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">saga: declined: insufficient funds, the switch was never called  {&quot;amount_cents&quot;:50000}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">-&gt; transaction-service  POST /internal/transactions/purchase  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: responded 200  {&quot;status&quot;:200}</span></li>
+          <li class=""><span class="who">client</span><span class="did">balance untouched<span class="got">50.00</span></span></li>
         </ol>
         <p class="outcome">Refused, and nothing was written.</p>
       </div>
@@ -1329,15 +1416,16 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>The same key returns the same result</h4>
           <span class="key">replay</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">A client that retries after a lost response must not be charged twice. The claim lives in Redis, so it holds across gateway replicas.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">POST /transactions/purchase<span class="got">rrn=178645525996</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">balance after the first call<span class="got">74.50</span></span></li>
-          <li><span class="who">client</span><span class="did">the identical request again, same idempotency key</span></li>
-          <li><span class="who">api-gateway</span><span class="did">key already claimed, return the stored response<span class="got">rrn=178645525996</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">balance unchanged, the switch was never called again<span class="got">74.50</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /transactions/purchase<span class="got">rrn=178660111082</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">balance after the first call<span class="got">74.50</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">the identical request again, same idempotency key</span></li>
+          <li class=""><span class="who">api-gateway</span><span class="did">key already claimed, return the stored response<span class="got">rrn=178660111082</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">balance unchanged, the switch was never called again<span class="got">74.50</span></span></li>
         </ol>
         <p class="outcome">One charge, two responses, identical RRN.</p>
       </div>
@@ -1345,13 +1433,14 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>A reused key with a different body is rejected</h4>
           <span class="key">key-reuse</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">Returning the cached response would answer the wrong question; charging would break the guarantee. So it is an error.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">pay 25.50 with a key<span class="got">approved</span></span></li>
-          <li><span class="who">client</span><span class="did">pay 999.00 with the SAME key</span></li>
-          <li><span class="who">api-gateway</span><span class="did">fingerprint of the body does not match the claim<span class="got">HTTP 400</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">pay 25.50 with a key<span class="got">approved</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">pay 999.00 with the SAME key</span></li>
+          <li class=""><span class="who">api-gateway</span><span class="did">fingerprint of the body does not match the claim<span class="got">HTTP 400</span></span></li>
         </ol>
         <p class="outcome">Rejected: This idempotency key was already used for a different request body.</p>
       </div>
@@ -1359,13 +1448,14 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>The ledger is idempotent on RRN</h4>
           <span class="key">ledger-idempotency</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">The gateway&#x27;s Redis claim is best-effort. The PRIMARY KEY on transactions.rrn is the guarantee that cannot be wrong.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">a top-up lands<span class="got">rrn=178645526190 balance=100.00</span></span></li>
-          <li><span class="who">note</span><span class="did">replaying the same RRN at the ledger is an internal call<span class="got">shown here because it is the layer the retry policy depends on</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">second insert with the same RRN hits the primary key<span class="got">returns already_recorded rather than posting again</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">a top-up lands<span class="got">rrn=178660111105 balance=100.00</span></span></li>
+          <li class=""><span class="who">note</span><span class="did">replaying the same RRN at the ledger is an internal call<span class="got">shown here because it is the layer the retry policy depends on</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">second insert with the same RRN hits the primary key<span class="got">returns already_recorded rather than posting again</span></span></li>
         </ol>
         <p class="outcome">The RRN is the unit of deduplication, not the HTTP request.</p>
       </div>
@@ -1375,14 +1465,26 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>A large amount goes to review</h4>
           <span class="key">risk-amount-review</span>
+          <span class="key">11 observed</span>
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">Over 2,000.00 the transaction is held rather than declined. Review is a distinct outcome from decline, and it does not reach the switch.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">wallet funded to 5,000.00, pay 2,500.00</span></li>
-          <li><span class="who">risk-service</span><span class="did">amount rule: 250000 cents is over the 200000 threshold<span class="got">outcome=review</span></span></li>
-          <li><span class="who">switch</span><span class="did">not contacted<span class="got">rrn=None</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">nothing posted<span class="got">balance=5,000.00</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">wallet funded to 5,000.00, pay 2,500.00</span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /transactions/purchase 2,500.00<span class="got">correlation cid-38b60b7c56a04dac</span></span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: POST /transactions/purchase  {&quot;client&quot;:&quot;127.0.0.1&quot;}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: idempotency key claimed  {&quot;key&quot;:&quot;sc-4d6762827f5b&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  GET /internal/ledger/accounts/acc_78abe8a3afd7/balance  200</span></li>
+          <li class="obs-row"><span class="who">risk-service</span><span class="did">risk review for card=...5567 amount_cents=250000: amount 250000 cents exceeds review threshold 200000</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; risk-service  POST /internal/risk/evaluate  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">risk review card=...5567: amount 250000 cents exceeds review threshold 200000</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">risk: risk decision: review  {&quot;reasons&quot;:[&quot;amount 250000 cents exceeds review threshold 200000&quot;]}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">-&gt; transaction-service  POST /internal/transactions/purchase  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: responded 200  {&quot;status&quot;:200}</span></li>
+          <li class=""><span class="who">note</span><span class="did">no switch line above<span class="got">review does not reach the switch</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">balance unchanged<span class="got">5,000.00</span></span></li>
         </ol>
         <p class="outcome">amount 250000 cents exceeds review threshold 200000</p>
       </div>
@@ -1390,13 +1492,25 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>A very large amount is declined outright</h4>
           <span class="key">risk-amount-decline</span>
+          <span class="key">11 observed</span>
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">Over 10,000.00 there is no review queue, it is simply refused.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">wallet funded to 20,000.00, pay 12,000.00</span></li>
-          <li><span class="who">risk-service</span><span class="did">amount rule: 1200000 cents is over the 1000000 hard limit<span class="got">outcome=decline</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">nothing posted<span class="got">balance=20,000.00</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">wallet funded to 20,000.00, pay 12,000.00</span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /transactions/purchase 12,000.00<span class="got">correlation cid-775fde030ec74a7b</span></span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: POST /transactions/purchase  {&quot;client&quot;:&quot;127.0.0.1&quot;}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: idempotency key claimed  {&quot;key&quot;:&quot;sc-d50aeb35daeb&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  GET /internal/ledger/accounts/acc_4bc789adffa2/balance  200</span></li>
+          <li class="obs-row"><span class="who">risk-service</span><span class="did">risk decline for card=...2940 amount_cents=1200000: amount 1200000 cents exceeds hard limit 1000000</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; risk-service  POST /internal/risk/evaluate  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">risk decline card=...2940: amount 1200000 cents exceeds hard limit 1000000</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">risk: risk decision: decline  {&quot;reasons&quot;:[&quot;amount 1200000 cents exceeds hard limit 1000000&quot;]}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">-&gt; transaction-service  POST /internal/transactions/purchase  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: responded 200  {&quot;status&quot;:200}</span></li>
+          <li class=""><span class="who">client</span><span class="did">balance unchanged<span class="got">20,000.00</span></span></li>
         </ol>
         <p class="outcome">amount 1200000 cents exceeds hard limit 1000000</p>
       </div>
@@ -1404,13 +1518,14 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>Manual key entry raises the bar</h4>
           <span class="key">risk-entry-mode</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">DE 22 carries how the card was read. A keyed entry over 500.00 is reviewed at an amount a chip read would approve.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">600.00, entry mode 05 (chip)<span class="got">status=approved</span></span></li>
-          <li><span class="who">client</span><span class="did">the same 600.00, entry mode 01 (manually keyed)<span class="got">status=review</span></span></li>
-          <li><span class="who">risk-service</span><span class="did">entry-mode rule fired only for the keyed attempt<span class="got">manually keyed entry combined with an elevated amount</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">600.00, entry mode 05 (chip)<span class="got">status=approved</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">the same 600.00, entry mode 01 (manually keyed)<span class="got">status=review</span></span></li>
+          <li class=""><span class="who">risk-service</span><span class="did">entry-mode rule fired only for the keyed attempt<span class="got">manually keyed entry combined with an elevated amount</span></span></li>
         </ol>
         <p class="outcome">Same amount, same card type, different outcome, because how the card was read is itself a signal.</p>
       </div>
@@ -1418,13 +1533,14 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>Velocity escalates approve to review to decline</h4>
           <span class="key">risk-velocity</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">Counted per card in a 60 second window. In the deployed platform the counter is in Redis, so it escalates across gateway replicas.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">seven 5.00 purchases in quick succession on one card</span></li>
-          <li><span class="who">risk-service</span><span class="did">attempts counted in a 60s window<span class="got">approved -&gt; approved -&gt; approved -&gt; review -&gt; review -&gt; decline -&gt; decline</span></span></li>
-          <li><span class="who">risk-service</span><span class="did">thresholds<span class="got">review above 3 attempts, decline above 5</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">seven 5.00 purchases in quick succession on one card</span></li>
+          <li class=""><span class="who">risk-service</span><span class="did">attempts counted in a 60s window<span class="got">approved -&gt; approved -&gt; approved -&gt; review -&gt; review -&gt; decline -&gt; decline</span></span></li>
+          <li class=""><span class="who">risk-service</span><span class="did">thresholds<span class="got">review above 3 attempts, decline above 5</span></span></li>
         </ol>
         <p class="outcome">Escalation is gradual, and it is the risk engine talking, not the solvency check.</p>
       </div>
@@ -1434,13 +1550,22 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>A token cannot spend another card</h4>
           <span class="key">authz-cross-account</span>
+          <span class="key">7 observed</span>
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">Authentication proves who is calling. It does not prove they may debit this particular card, which is a separate check.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">attacker holds a valid token and knows the victim&#x27;s card number</span></li>
-          <li><span class="who">transaction-service</span><span class="did">card owner does not match the token subject<span class="got">HTTP 403</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">victim untouched<span class="got">100.00</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">attacker holds a valid token and knows the victim&#x27;s card number</span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /transactions/purchase against the victim&#x27;s card, attacker&#x27;s token<span class="got">correlation cid-584c50da1eb042fc</span></span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: POST /transactions/purchase  {&quot;client&quot;:&quot;127.0.0.1&quot;}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: idempotency key claimed  {&quot;key&quot;:&quot;authz-8dfcc1c548e8&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">-&gt; transaction-service  POST /internal/transactions/purchase  403</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: responded 403  {&quot;status&quot;:403}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">released idempotency key after a 403, nothing happened</span></li>
+          <li class=""><span class="who">client</span><span class="did">HTTP status<span class="got">403</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">victim&#x27;s balance<span class="got">100.00</span></span></li>
         </ol>
         <p class="outcome">403. A valid token is not a licence to spend from any card.</p>
       </div>
@@ -1448,11 +1573,12 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>An unregistered card is refused</h4>
           <span class="key">authz-unknown-card</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">Resolution happens before anything else, and failing it costs nothing.</p>
         <ol class="flow">
-          <li><span class="who">transaction-service</span><span class="did">resolve the card at ledger-service<span class="got">HTTP 404</span></span></li>
+          <li class=""><span class="who">transaction-service</span><span class="did">resolve the card at ledger-service<span class="got">HTTP 404</span></span></li>
         </ol>
         <p class="outcome">404 before any money path is entered.</p>
       </div>
@@ -1460,11 +1586,12 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>No token, no transaction</h4>
           <span class="key">authz-no-token</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">The gateway is the only place this is enforced, because nothing else is reachable from outside the namespace.</p>
         <ol class="flow">
-          <li><span class="who">api-gateway</span><span class="did">no Authorization header<span class="got">HTTP 401</span></span></li>
+          <li class=""><span class="who">api-gateway</span><span class="did">no Authorization header<span class="got">HTTP 401</span></span></li>
         </ol>
         <p class="outcome">401 at the edge.</p>
       </div>
@@ -1474,15 +1601,37 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>Send money to a phone number</h4>
           <span class="key">transfer</span>
+          <span class="key">22 observed</span>
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">The MSISDN is the account. This only works if auth-service and ledger-service normalise the number identically.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">recipient registered as 03614612828, sender types 03614612828</span></li>
-          <li><span class="who">ledger-service</span><span class="did">resolve payee: card, then account id, then MSISDN<span class="got">resolved to acc_ed63f92f3d70</span></span></li>
-          <li><span class="who">iso8583-adapter</span><span class="did">processing code 400000, recipient in DE 103<span class="got">status=approved</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">one posting, sender debited, recipient credited<span class="got">rrn=178645526625</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">recipient balance<span class="got">7.50</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">recipient registered as 03181825278, sender types 03181825278</span></li>
+          <li class=""><span class="who">client</span><span class="did">POST /transactions/transfer 7.50 to 03181825278<span class="got">correlation cid-204001635e434361</span></span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: POST /transactions/transfer  {&quot;client&quot;:&quot;127.0.0.1&quot;}</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: idempotency key claimed  {&quot;key&quot;:&quot;tr-4b6621d86acc&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/resolve  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  GET /internal/ledger/accounts/acc_7696f94016d4/balance  200</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; risk-service  POST /internal/risk/evaluate  200</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">authorize rrn=178660111714 card=...5039 amount_cents=750 pin_present=True</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">security: PIN block built  {&quot;ksn&quot;:&quot;&lt;redacted&gt;&quot;,&quot;algorithm&quot;:&quot;ISO 9564 format 0&quot;}</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">soap: SOAP authorizeRequest to the ISO 8583 gateway  {&quot;endpoint&quot;:&quot;http://127.0.0.1:8090/Iso8583Gateway&quot;,&quot;rrn&quot;:&quot;178660111714&quot;}</span></li>
+          <li class="obs-row"><span class="who">ace-stub</span><span class="did">authorizeRequest -&gt; MTI 0200 fields={2: &#x27;...5039&#x27;, 3: &#x27;400000&#x27;, 4: &#x27;000000000750&#x27;, 22: &#x27;01&#x27;, 37: &#x27;178660111714&#x27;, 49: &#x27;840&#x27;, 52: &#x27;&lt;redacted&gt;&#x27;, 53: &#x27;&lt;redacted&gt;&#x27;, 103: &#x27;acc_6b1b051d02c1&#x27;}</span></li>
+          <li class="obs-row"><span class="who">ace-stub</span><span class="did">iso8583: built MTI 0200, sending to the switch  {&quot;mti&quot;:&quot;0200&quot;,&quot;data_elements&quot;:[2,3,4,22,37,49,52,53,103]}</span></li>
+          <li class="obs-row"><span class="who">ace-stub</span><span class="did">switch: switch answered MTI 0210  {&quot;mti&quot;:&quot;0210&quot;,&quot;de39&quot;:&quot;00&quot;,&quot;de38&quot;:&quot;A18008&quot;}</span></li>
+          <li class="obs-row"><span class="who">ace-stub</span><span class="did">authorizeRequest &lt;- MTI 0210 fields={11: &#x27;000017&#x27;, 37: &#x27;178660111714&#x27;, 38: &#x27;A18008&#x27;, 39: &#x27;00&#x27;}</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">-&gt; ace-stub  POST /Iso8583Gateway  200</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">authorize rrn=178660111714 -&gt; approved (00 Approved / completed successfully)</span></li>
+          <li class="obs-row"><span class="who">iso8583-adapter</span><span class="did">soap: SOAP response: approved  {&quot;de39&quot;:&quot;00&quot;,&quot;text&quot;:&quot;Approved / completed successfully&quot;,&quot;authId&quot;:&quot;A18008&quot;,&quot;stan&quot;:&quot;000017&quot;}</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; iso8583-adapter  POST /internal/iso8583/authorize  200</span></li>
+          <li class="obs-row"><span class="who">ledger-service</span><span class="did">ledger: double-entry posting: recorded  {&quot;rrn&quot;:&quot;178660111714&quot;,&quot;amount_cents&quot;:750,&quot;debit&quot;:&quot;acc_7696f94016d4&quot;,&quot;credit&quot;:&quot;acc_6b1b051d02c1&quot;}</span></li>
+          <li class="obs-row"><span class="who">ledger-service</span><span class="did">posting rrn=178660111714 status=recorded amount_cents=750</span></li>
+          <li class="obs-row"><span class="who">transaction-service</span><span class="did">-&gt; ledger-service  POST /internal/ledger/postings  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">-&gt; transaction-service  POST /internal/transactions/transfer  200</span></li>
+          <li class="obs-row"><span class="who">api-gateway</span><span class="did">gateway: responded 200  {&quot;status&quot;:200}</span></li>
+          <li class=""><span class="who">client</span><span class="did">what came back<span class="got">status=approved rrn=178660111714</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">recipient balance<span class="got">7.50</span></span></li>
         </ol>
         <p class="outcome">Card lookup is tried first, because a 12 to 15 digit card is indistinguishable from a phone number by length.</p>
       </div>
@@ -1490,11 +1639,12 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>You cannot pay yourself</h4>
           <span class="key">self-transfer</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">A debit and a credit on one account balances perfectly and moves nothing. Recording it would be noise in the journal.</p>
         <ol class="flow">
-          <li><span class="who">transaction-service</span><span class="did">sender and recipient resolve to one account<span class="got">HTTP 400</span></span></li>
+          <li class=""><span class="who">transaction-service</span><span class="did">sender and recipient resolve to one account<span class="got">HTTP 400</span></span></li>
         </ol>
         <p class="outcome">Sender and recipient are the same account.</p>
       </div>
@@ -1504,15 +1654,16 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>A switch timeout is an UNKNOWN outcome, not a decline</h4>
           <span class="key">switch-timeout</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">The request may have been processed. Treating silence as a decline is how a customer gets charged for a transaction the platform denies.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">SOAP authorizeRequest with DE 48 = SIMULATE_TIMEOUT<span class="got">sent straight to the ISO 8583 gateway</span></span></li>
-          <li><span class="who">host-simulator</span><span class="did">DE 48 recognised, no 0210 is ever sent<span class="got">silence on the socket</span></span></li>
-          <li><span class="who">ace-stub</span><span class="did">the read times out waiting for a reply<span class="got">after 10.0s</span></span></li>
-          <li><span class="who">ace-stub</span><span class="did">returns a SOAP fault, which arrives as HTTP 500<span class="got">HTTP 504</span></span></li>
-          <li><span class="who">client</span><span class="did">fault body<span class="got">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&lt;soapenv:Envelope xmlns:soapenv=&quot;http://schemas.xmlsoap.org/soap/envelope/&quot;&gt;&lt;soapenv:Body&gt;&lt;soapenv:Fault&gt;&lt;faultc</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">SOAP authorizeRequest with DE 48 = SIMULATE_TIMEOUT<span class="got">sent straight to the ISO 8583 gateway</span></span></li>
+          <li class=""><span class="who">host-simulator</span><span class="did">DE 48 recognised, no 0210 is ever sent<span class="got">silence on the socket</span></span></li>
+          <li class=""><span class="who">ace-stub</span><span class="did">the read times out waiting for a reply<span class="got">after 10.0s</span></span></li>
+          <li class=""><span class="who">ace-stub</span><span class="did">returns a SOAP fault, which arrives as HTTP 500<span class="got">HTTP 504</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">fault body<span class="got">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&lt;soapenv:Envelope xmlns:soapenv=&quot;http://schemas.xmlsoap.org/soap/envelope/&quot;&gt;&lt;soapenv:Body&gt;&lt;soapenv:Fault&gt;&lt;faultc</span></span></li>
         </ol>
         <p class="outcome">Fault after 10.0s of silence. The caller is told the outcome is UNKNOWN, and transaction-service answers an unknown with a reversal rather than a decline.</p>
       </div>
@@ -1520,35 +1671,37 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>When the ledger refuses after the switch approved, the saga reverses</h4>
           <span class="key">saga-compensation</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">The authorisation is real and must be undone. The customer is told &#x27;reversed&#x27;, not &#x27;approved&#x27;, because no money moved.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">wallet holds exactly 20.00, fire 6 concurrent 20.00 purchases</span></li>
-          <li><span class="who">note</span><span class="did">every request passes the pre-check, because they all read the balance before any of them posts</span></li>
-          <li><span class="who">switch</span><span class="did">authorises every request that got past the pre-check<span class="got">6 attempts</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">solvency enforced inside the posting transaction<span class="got">1 posted, 2 refused after authorisation</span></span></li>
-          <li><span class="who">transaction-service</span><span class="did">compensating 0400 reversal for each refusal<span class="got">2 reversed</span></span></li>
-          <li><span class="who">all outcomes</span><span class="did">the full tally<span class="got">1 approved, 2 declined, 2 reversed, 1 review</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">final balance, never negative<span class="got">0.00</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">books still balance<span class="got">balanced=True</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">wallet holds exactly 20.00, fire 6 concurrent 20.00 purchases</span></li>
+          <li class=""><span class="who">note</span><span class="did">every request passes the pre-check, because they all read the balance before any of them posts</span></li>
+          <li class=""><span class="who">switch</span><span class="did">authorises every request that got past the pre-check<span class="got">6 attempts</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">solvency enforced inside the posting transaction<span class="got">1 posted, 2 refused after authorisation</span></span></li>
+          <li class=""><span class="who">transaction-service</span><span class="did">compensating 0400 reversal for each refusal<span class="got">2 reversed</span></span></li>
+          <li class=""><span class="who">all outcomes</span><span class="did">the full tally<span class="got">1 approved, 1 declined, 2 reversed, 2 review</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">final balance, never negative<span class="got">0.00</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">books still balance<span class="got">balanced=True</span></span></li>
         </ol>
-        <p class="outcome">Exactly one of six succeeded and the balance is 0.00. Full tally: 1 approved, 2 declined, 2 reversed, 1 review.</p>
+        <p class="outcome">Exactly one of six succeeded and the balance is 0.00. Full tally: 1 approved, 1 declined, 2 reversed, 2 review.</p>
       </div>
       <div class="scn">
         <header>
           <h4>A risk service that is down fails CLOSED</h4>
           <span class="key">risk-unavailable</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">An outage must not become an open fraud window. The alternative, approving because the check could not run, is strictly worse.</p>
         <ol class="flow">
-          <li><span class="who">operator</span><span class="did">stop risk-service<span class="got">SIGTERM</span></span></li>
-          <li><span class="who">operator</span><span class="did">confirm nothing is listening on :8083<span class="got">port closed</span></span></li>
-          <li><span class="who">transaction-service</span><span class="did">risk-service unreachable<span class="got">HTTP 503</span></span></li>
-          <li><span class="who">transaction-service</span><span class="did">refuse rather than approve unchecked<span class="got">Transaction service unavailable: [transaction-service] POST /internal/transactio</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">nothing posted<span class="got">100.00</span></span></li>
-          <li><span class="who">operator</span><span class="did">restart risk-service<span class="got">ready</span></span></li>
+          <li class=""><span class="who">operator</span><span class="did">stop risk-service<span class="got">SIGTERM</span></span></li>
+          <li class=""><span class="who">operator</span><span class="did">confirm nothing is listening on :8083<span class="got">port closed</span></span></li>
+          <li class=""><span class="who">transaction-service</span><span class="did">risk-service unreachable<span class="got">HTTP 503</span></span></li>
+          <li class=""><span class="who">transaction-service</span><span class="did">refuse rather than approve unchecked<span class="got">Transaction service unavailable: [transaction-service] POST /internal/transactio</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">nothing posted<span class="got">100.00</span></span></li>
+          <li class=""><span class="who">operator</span><span class="did">restart risk-service<span class="got">ready</span></span></li>
         </ol>
         <p class="outcome">503 while the check cannot run. Approving unchecked would turn an outage into an open fraud window.</p>
       </div>
@@ -1558,28 +1711,30 @@ python scripts/scenarios.py --only risk      <span class="c"># one group</span><
         <header>
           <h4>Concurrent spends cannot overdraw one balance</h4>
           <span class="key">concurrency</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">The failure mode is two debits reading the same sufficient balance and both posting. It has to be the database that prevents this, not Python.</p>
         <ol class="flow">
-          <li><span class="who">client</span><span class="did">wallet holds 30.00, fire 8 concurrent 30.00 purchases</span></li>
-          <li><span class="who">ledger-service</span><span class="did">SELECT FOR UPDATE on the debit row, inside the same transaction as the insert<span class="got">1 approved, 1 decline, 2 declined, 2 reversed, 2 review</span></span></li>
-          <li><span class="who">note</span><span class="did">the review and decline outcomes are the risk engine, not solvency<span class="got">eight attempts in one second also trips velocity</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">final balance<span class="got">0.00</span></span></li>
+          <li class=""><span class="who">client</span><span class="did">wallet holds 30.00, fire 8 concurrent 30.00 purchases</span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">SELECT FOR UPDATE on the debit row, inside the same transaction as the insert<span class="got">1 approved, 3 declined, 2 reversed, 2 review</span></span></li>
+          <li class=""><span class="who">note</span><span class="did">the review and decline outcomes are the risk engine, not solvency<span class="got">eight attempts in one second also trips velocity</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">final balance<span class="got">0.00</span></span></li>
         </ol>
-        <p class="outcome">One of eight succeeded. Balance 0.00, never below zero.</p>
+        <p class="outcome">1 of eight posted. Balance 0.00, never below zero. The rest were refused by solvency or by the velocity rule.</p>
       </div>
       <div class="scn">
         <header>
           <h4>The books balance, always</h4>
           <span class="key">integrity</span>
+          
           <span class="verdict ok">ok</span>
         </header>
         <p class="why">Total debits equal total credits across every posting the simulator has just made, including the reversed and declined ones.</p>
         <ol class="flow">
-          <li><span class="who">ledger-service</span><span class="did">SUM(debits) - SUM(credits)<span class="got">balanced=True</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">customer float<span class="got">30,500.00</span></span></li>
-          <li><span class="who">ledger-service</span><span class="did">funding account, the mirror image<span class="got">-30,500.00</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">SUM(debits) - SUM(credits)<span class="got">balanced=True</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">customer float<span class="got">30,500.00</span></span></li>
+          <li class=""><span class="who">ledger-service</span><span class="did">funding account, the mirror image<span class="got">-30,500.00</span></span></li>
         </ol>
         <p class="outcome">The funding account owes exactly what customers hold. That is the number a treasury team reconciles.</p>
       </div>

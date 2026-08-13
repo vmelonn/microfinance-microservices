@@ -34,7 +34,9 @@ genuinely nasty bug class, and ContextVar is the thing that prevents it.
 """
 
 import contextvars
+import json
 import logging
+import time
 import uuid
 
 CORRELATION_HEADER = "X-Correlation-ID"
@@ -66,6 +68,11 @@ def outbound_headers(extra: dict | None = None) -> dict:
     return headers
 
 
+# Computed once. time.localtime() per log record would be a syscall on a hot
+# path to produce a value that does not change.
+_TZ_OFFSET = time.strftime("%z")
+
+
 class CorrelationIdFilter(logging.Filter):
     """Injects the current correlation ID into every log record, so handlers
     never have to remember to include it, one forgotten log line is one
@@ -76,25 +83,56 @@ class CorrelationIdFilter(logging.Filter):
         return True
 
 
+class JsonLogFormatter(logging.Formatter):
+    """
+    One JSON object per line, built with json.dumps.
+
+    NOT a format string. The previous version interpolated the message
+    directly into a JSON document, so any message containing a quote, a
+    backslash or a newline produced a line that would not parse. On a single
+    local run 38 of 59 lines were invalid, which nothing noticed because
+    nothing had tried to read them back until the scenario runner did.
+    """
+
+    def __init__(self, service_name: str):
+        super().__init__(datefmt="%Y-%m-%dT%H:%M:%S")
+        self.service_name = service_name
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            # Milliseconds matter: a purchase crosses five services in tens
+            # of them, and at one-second resolution a reconstructed flow
+            # cannot be ordered. The offset is appended here rather than via
+            # strftime %z because strftime formats the whole timestamp in one
+            # pass and would put the offset before the milliseconds.
+            "ts": f"{self.formatTime(record, self.datefmt)}"
+                  f".{int(record.msecs):03d}{_TZ_OFFSET}",
+            "level": record.levelname,
+            "service": self.service_name,
+            "correlation_id": getattr(record, "correlation_id", "-"),
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            # As a FIELD, not spliced into the message. A traceback is
+            # multi-line, and pasting one into a single-line record turned
+            # one error into several lines that no parser could read.
+            payload["exception"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            payload["stack"] = self.formatStack(record.stack_info)
+        return json.dumps(payload, default=str)
+
+
 def configure_logging(service_name: str, level: str = "INFO") -> logging.Logger:
     """
     Structured, single-line, correlation-tagged logging. Every service calls
     this once at startup so all seven produce a format that can be grepped
-    and aggregated identically.
+    and aggregated identically, and, since the formatter below, actually
+    parsed.
     """
     handler = logging.StreamHandler()
     handler.addFilter(CorrelationIdFilter())
-    handler.setFormatter(
-        logging.Formatter(
-            fmt=(
-                '{"ts":"%(asctime)s","level":"%(levelname)s",'
-                f'"service":"{service_name}",'
-                '"correlation_id":"%(correlation_id)s",'
-                '"logger":"%(name)s","message":"%(message)s"}'
-            ),
-            datefmt="%Y-%m-%dT%H:%M:%S%z",
-        )
-    )
+    handler.setFormatter(JsonLogFormatter(service_name))
 
     root = logging.getLogger()
     root.handlers.clear()
