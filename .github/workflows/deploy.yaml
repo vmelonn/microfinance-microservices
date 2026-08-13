@@ -485,6 +485,16 @@ jobs:
       # pod. Simpler, and it exercises the same path a real client takes,
       # through the Route and the router, instead of requiring a pod to
       # reach its own external hostname.
+      - name: Publish the console URL
+        # Into the job summary, so the link is one click from the run rather
+        # than an oc command. Paste it into the repository's About > Website
+        # field once and it also shows at the top of the repo page.
+        run: |
+          ROUTE="https://$(oc get route api-gateway -o jsonpath='{.spec.host}')"
+          echo "### Operator console" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "[$ROUTE]($ROUTE)" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Smoke test
         run: |
           set -euo pipefail
