@@ -173,6 +173,9 @@ def create_posting(body: PostingRequest, request: Request):
         # the debit side simply cannot cover it. A distinct status so callers
         # can separate "your fault" from "my fault" without parsing a string.
         log.warning(f"insufficient funds rrn={body.rrn}: {exc}")
+        trace.emit("ledger", "refused: insufficient funds",
+                   {"account_id": exc.account_id, "balance_cents": exc.balance_cents,
+                    "amount_cents": exc.amount_cents}, level="warn")
         raise HTTPException(status_code=409, detail={
             "error": "insufficient_funds",
             "account_id": exc.account_id,
@@ -220,6 +223,9 @@ def topup(body: TopupRequest, request: Request):
         log.error(f"topup failed rrn={body.rrn}: {exc!r}")
         raise HTTPException(status_code=422, detail=f"Top-up rejected: {exc}")
 
+    trace.emit("ledger", f"top-up posting: {result['status']}",
+               {"rrn": body.rrn, "amount_cents": body.amount_cents,
+                "debit": "acc_system_funding", "credit": body.account_id})
     log.info(f"topup rrn={body.rrn} account={body.account_id} "
              f"amount_cents={body.amount_cents} status={result['status']}")
     return result

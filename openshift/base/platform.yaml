@@ -24,6 +24,20 @@ data:
   LOG_LEVEL: "INFO"
   DEFAULT_CURRENCY_CODE: "840"
 
+  # Every service writes trace events here, and that is what lets the console
+  # show ONE request's path across all of them.
+  #
+  # Here rather than per-deployment because it was per-deployment and only
+  # two of the eight had it. The Live trace tab consequently showed a request
+  # reaching the gateway, being scored by risk, and then apparently nothing:
+  # the saga, the adapter, the SOAP hop and the ledger were all writing their
+  # trace points into a client that was never configured.
+  #
+  # Best-effort by design. A service whose Redis is unreachable logs a
+  # warning and starts anyway, because tracing is a diagnostic aid and must
+  # never be the reason a payment path is down.
+  REDIS_URL: "redis://redis:6379/0"
+
   # Risk thresholds. In the ConfigMap rather than baked into the image
   # specifically because these are the values most likely to need changing at
   # short notice, in response to an actual attack pattern, and a threshold

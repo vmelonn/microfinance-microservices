@@ -16,7 +16,14 @@ dependencies = []
 # instance) imports it lazily inside the function that needs it.
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "httpx>=0.27"]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    # An in-process Redis for run_local, so the console's Live trace tab
+    # works without a server. Optional: if it is absent the stack starts
+    # exactly as before and the tab says tracing is off.
+    "fakeredis>=2.21",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

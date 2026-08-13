@@ -302,6 +302,8 @@ def transfer(body: TransferRequest, request: Request):
     """Same saga, different processing code (DE 3 = 400000) and a real
     recipient account instead of the demo merchant."""
     state = request.app.state
+    trace.emit("saga", "transfer: processing code 400000, payee in DE 103",
+               {"amount_cents": body.amount_cents})
 
     sender = _resolve_or_404(state, body.sender_card_number, "Sender card is not registered.")
     recipient = _resolve_or_404(state, body.recipient_account, "Recipient is not registered.")
@@ -414,6 +416,9 @@ def topup(body: TopupRequest, request: Request):
     # Before the ledger learned to tell a collision from a replay, this
     # returned "approved" with ledger_status "already_recorded" and moved no
     # money at all.
+    trace.emit("saga", "top-up: no switch, this is an agent cash-in",
+               {"amount_cents": body.amount_cents})
+
     result = last_error = None
     for attempt in range(3):
         rrn = _generate_rrn()
@@ -426,6 +431,8 @@ def topup(body: TopupRequest, request: Request):
             break
         except ServiceRejectedError as exc:
             if _is_rrn_collision(exc) and attempt < 2:
+                trace.emit("saga", "RRN collision, retrying with a new reference",
+                           {"rrn": rrn}, level="warn")
                 log.warning(f"RRN collision on {rrn}, retrying with a new reference")
                 last_error = exc
                 continue

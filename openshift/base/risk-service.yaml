@@ -58,9 +58,6 @@ spec:
           envFrom:
             - configMapRef: {name: microfinance-config}
             - secretRef: {name: microfinance-secrets}
-          env:
-            - name: REDIS_URL
-              value: "redis://redis:6379/0"
           # Requests are what the scheduler packs on; limits are the hard cap.
           # CPU limit is deliberately omitted: CFS throttling on a latency-
           # sensitive service adds tail latency for no benefit once requests

@@ -119,10 +119,73 @@ SERVICES = [
     },
 ]
 
-# Tracing needs a Redis every service can reach. Without one the console's
-# trace tab is empty but everything else works, so this is opportunistic:
-# set TRACE_REDIS_URL before running to enable it.
+# Tracing needs a Redis every service can reach. Point TRACE_REDIS_URL at a
+# real one to use it; otherwise start_local_redis() below runs an embedded
+# stand-in, so the console's Live trace tab works out of the box.
 TRACE_REDIS = os.environ.get("TRACE_REDIS_URL", "")
+LOCAL_REDIS_PORT = int(os.environ.get("LOCAL_REDIS_PORT", "16379"))
+
+
+def start_local_redis():
+    """
+    An in-process Redis on 127.0.0.1:LOCAL_REDIS_PORT, or None.
+
+    WHY. Tracing is the one feature that cannot work without shared state,
+    and locally there was no Redis, so the Live trace tab was permanently
+    empty and nothing about it was ever exercised. That is how six of the
+    seven tracing services reached the cluster with no REDIS_URL at all: the
+    trace tab showed a request hitting the gateway and risk and then
+    apparently stopping, and no local run could have revealed it.
+
+    fakeredis speaks real RESP over a real socket, so the services use their
+    ordinary redis client and know nothing about this. Optional on purpose:
+    without the package the stack behaves exactly as it did before.
+    """
+    try:
+        from fakeredis import TcpFakeServer
+    except ImportError:
+        print("  (no fakeredis, the Live trace tab will be empty. "
+              "pip install fakeredis)")
+        return None
+
+    import threading
+
+    # TcpFakeServer IS the server, a ThreadingTCPServer subclass. Passing it
+    # as a request handler to another ThreadingTCPServer, which is the
+    # obvious-looking mistake, gets you a socket that accepts connections and
+    # then throws on every one of them.
+    class QuietFakeRedis(TcpFakeServer):
+        """
+        Same server, without the shutdown noise.
+
+        socketserver prints a full traceback for any exception a handler
+        raises, and every service dropping its connection at teardown raises
+        ConnectionResetError. Eight of those buried the actual test output.
+        A reset from a client that has gone away is not an error worth
+        printing; anything else still is.
+        """
+
+        allow_reuse_address = True
+        daemon_threads = True
+
+        def handle_error(self, request, client_address):
+            import sys as _sys
+
+            if isinstance(_sys.exc_info()[1], (ConnectionResetError,
+                                               ConnectionAbortedError,
+                                               BrokenPipeError)):
+                return
+            super().handle_error(request, client_address)
+
+    try:
+        server = QuietFakeRedis(("127.0.0.1", LOCAL_REDIS_PORT), server_type="redis")
+    except OSError as exc:
+        print(f"  (could not bind the trace Redis on :{LOCAL_REDIS_PORT}: {exc})")
+        return None
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
 
 SHARED_ENV = {
     "JWT_SECRET": "local-run-shared-secret-not-for-any-real-use",
@@ -501,6 +564,14 @@ def main() -> int:
     if args.stop:
         return stop_stragglers()
 
+    global TRACE_REDIS
+    redis_server = None
+    if not TRACE_REDIS:
+        redis_server = start_local_redis()
+        if redis_server:
+            TRACE_REDIS = f"redis://127.0.0.1:{LOCAL_REDIS_PORT}/0"
+            print(f"trace Redis (embedded)      :{LOCAL_REDIS_PORT}  ready")
+
     # Refuse to start on top of a previous run. Binding would fail, but
     # readiness would pass against the OLD process and the stack would serve
     # the previous build while looking healthy.
@@ -533,6 +604,12 @@ def main() -> int:
         return verify()
 
     finally:
+        # The embedded Redis is deliberately NOT shut down here.
+        # ThreadingTCPServer.shutdown() blocks until serve_forever returns,
+        # and with a client connection still open it does not return; the
+        # teardown hung there. It runs on a daemon thread, so interpreter
+        # exit reaps it and frees the port, which is the moment we want it
+        # freed anyway.
         for service, proc in reversed(procs):
             proc.terminate()
         for service, proc in reversed(procs):

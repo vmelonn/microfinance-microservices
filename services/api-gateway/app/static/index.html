@@ -129,6 +129,23 @@
   .signin-note button{font-family:var(--mono);font-size:var(--step--1);
        cursor:pointer;padding:.25rem .6rem;border-radius:3px;
        border:1px solid var(--warn);background:none;color:var(--warn)}
+
+  /* A trace is a path through services, so the service is the organising
+     unit and each hop is a visible boundary rather than one more column. */
+  .hop{border-left:2px solid var(--rule);margin:0 0 .1rem;padding:0 0 .35rem .75rem}
+  .hop.hop-1{border-left-color:var(--accent)}
+  .hop.hop-2{border-left-color:var(--accent-2)}
+  .hop > .svc{display:flex;align-items:baseline;gap:.5rem;margin:.45rem 0 .3rem -0.9rem}
+  .hop > .svc .dot{width:9px;height:9px;border-radius:50%;background:var(--rule);
+       flex:0 0 auto}
+  .hop.hop-1 > .svc .dot{background:var(--accent)}
+  .hop.hop-2 > .svc .dot{background:var(--accent-2)}
+  .hop > .svc b{font-family:var(--mono);font-size:var(--step--1);font-weight:600}
+  .hop > .svc .took{font-family:var(--mono);font-size:var(--step--1);
+       color:var(--ink-faint);margin-left:auto}
+  .trace-outcome{display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap;
+       padding:.5rem .7rem;border:1px solid var(--rule);border-radius:3px;
+       background:var(--surface-sunk);margin-bottom:.7rem}
 </style>
 </head>
 <body>
@@ -306,9 +323,11 @@
         <button class="go" id="btn-load-trace">Load</button>
       </div>
       <div id="trace-meta" class="muted" style="margin-top:.6rem">
-        Make a payment on the Wallet tab, then come back. Every hop reports
-        itself: gateway, risk, the PIN block, the SOAP call, the switch, the
-        ledger.
+        Make a payment on the Wallet tab, then come back. Every service on the
+        path reports itself under the same correlation ID, so one purchase
+        reads as a sequence: the gateway claiming the idempotency key, the
+        saga scoring risk and generating an RRN, the PIN block, the SOAP call,
+        the switch answering with an MTI 0210, and the double-entry posting.
       </div>
       <div class="scroll" style="margin-top:.6rem;max-height:34rem">
         <div id="timeline"></div>
@@ -806,17 +825,52 @@ async function loadTrace(cid) {
     $("timeline").innerHTML = ""; return;
   }
   const ev = r.data.events;
-  $("trace-meta").innerHTML =
-    `<span class="pill approved">${ev.length} events</span>
-     <span class="muted">${r.data.total_ms} ms end to end &middot; ${esc(cid)}</span>`;
-  $("timeline").innerHTML = ev.map(e => {
-    const detail = Object.keys(e.detail||{}).length
-      ? `<span class="detail">${esc(JSON.stringify(e.detail))}</span>` : "";
-    return `<div class="ev ${esc(e.level)}">
-      <span class="t">${e.offset_ms} ms</span>
-      <span class="stage stage-${esc(e.stage)}">${esc(e.stage)}</span>
-      <span><span class="msg">${esc(e.event)}</span>${detail}
-        <span class="detail">${esc(e.service)}</span></span></div>`;
+
+  // What the request WAS and how it ended, from its own first and last
+  // events. Previously the outcome was simply the last of eleven flat rows,
+  // which is the one thing a reader wants first.
+  const opened = ev.find(e => e.stage === "gateway") || ev[0] || {};
+  const closed = [...ev].reverse().find(e => /^responded /.test(e.event || "")) || {};
+  const status = (closed.event || "").replace("responded ", "");
+  const worst = ev.some(e => e.level === "error") ? "declined"
+              : ev.some(e => e.level === "warn") ? "review" : "approved";
+  const services = [...new Set(ev.map(e => e.service))];
+
+  $("trace-meta").innerHTML = `
+    <div class="trace-outcome">
+      <span class="pill ${esc(worst)}">${status ? esc(status) : esc(worst)}</span>
+      <strong>${esc(opened.event || "request")}</strong>
+      <span class="muted">${ev.length} events across ${services.length} services
+        &middot; ${r.data.total_ms} ms end to end</span>
+      <span class="muted" style="margin-left:auto">${esc(cid)}</span>
+    </div>`;
+
+  // Group CONSECUTIVE events by service. Consecutive, not sorted: a request
+  // can re-enter a service (the adapter is entered, calls SOAP, and is
+  // entered again with the reply), and collapsing those into one block would
+  // hide the round trip that is the whole point of the SOAP boundary.
+  const hops = [];
+  for (const e of ev) {
+    const last = hops[hops.length - 1];
+    if (last && last.service === e.service) last.events.push(e);
+    else hops.push({service: e.service, events: [e]});
+  }
+
+  $("timeline").innerHTML = hops.map((hop, i) => {
+    const first = hop.events[0], last = hop.events[hop.events.length - 1];
+    const took = Math.round((last.offset_ms - first.offset_ms) * 10) / 10;
+    const rows = hop.events.map(e => {
+      const detail = Object.keys(e.detail||{}).length
+        ? `<span class="detail">${esc(JSON.stringify(e.detail))}</span>` : "";
+      return `<div class="ev ${esc(e.level)}">
+        <span class="t">${e.offset_ms} ms</span>
+        <span class="stage stage-${esc(e.stage)}">${esc(e.stage)}</span>
+        <span><span class="msg">${esc(e.event)}</span>${detail}</span></div>`;
+    }).join("");
+    return `<div class="hop hop-${i % 2 + 1}">
+      <div class="svc"><span class="dot"></span><b>${esc(hop.service)}</b>
+        <span class="took">+${first.offset_ms} ms${took ? `, ${took} ms here` : ""}</span>
+      </div>${rows}</div>`;
   }).join("");
 }
 

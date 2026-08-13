@@ -72,6 +72,7 @@ async function main() {
   const { window, $ } = await loadConsole();
   const doc = window.document;
 
+  let purchaseCid = null;
   const phoneA = "0300" + String(Date.now()).slice(-7);
   const phoneB = "0301" + String(Date.now() + 11).slice(-7);
 
@@ -166,6 +167,11 @@ async function main() {
   await settle(1500);
   const paid2 = html($("result"));
   check("purchase approved", /approved/i.test(paid2), paid2.slice(0, 200));
+  // Captured HERE, not scraped from #result at the end. By then the panel
+  // holds the transfer, and an earlier version of this test loaded whichever
+  // correlation id happened to be lying around, which was a gateway-only
+  // request, and then reported the trace as missing a service.
+  purchaseCid = (paid2.match(/cid-[0-9a-f]+/) || [])[0];
 
   $("btn-balance").click();
   await settle(600);
@@ -301,6 +307,55 @@ async function main() {
       .getAttribute("aria-selected");
     check(`${tab} tab activates`, selected === "true", `aria-selected=${selected}`);
     check(`${tab} panel is shown`, panel && !panel.hidden, `hidden=${panel && panel.hidden}`);
+  }
+
+  // ------------------------------------------------------------------------
+  section("13. the live trace shows every layer, grouped by request");
+
+  // Needs a Redis for the services to write into. run_local starts an
+  // embedded one; without it the tab correctly reports that tracing is off,
+  // and there is nothing to assert about a feature that is not running.
+  doc.querySelector('nav.tabs button[data-tab="trace"]').click();
+  await settle(200);
+  $("btn-refresh-traces").click();
+  await settle(900);
+
+  const listed = html($("trace-list"));
+  if (!/cid-/.test(listed)) {
+    console.log("  SKIP  tracing is off (no REDIS_URL), nothing to check");
+  } else {
+    check("recent requests are listed", true);
+
+    const cid = purchaseCid;
+    check("the purchase's correlation id was captured", !!cid, "none found");
+
+    if (cid) {
+      $("cid").value = cid;
+      $("btn-load-trace").click();
+      await settle(1200);
+
+      const meta = html($("trace-meta"));
+      const timeline = html($("timeline"));
+
+      check("the outcome is stated up front", /trace-outcome/.test(meta),
+            meta.slice(0, 160));
+      check("it says how many services were involved",
+            /across \d+ services/.test(meta), meta.slice(0, 200));
+      check("hops are grouped, not one flat list", /class="hop/.test(timeline),
+            timeline.slice(0, 160));
+
+      // The point of the exercise. Before REDIS_URL reached them, six of the
+      // seven tracing services wrote into a client that was never
+      // configured, so the timeline stopped after the gateway.
+      for (const svc of ["api-gateway", "transaction-service",
+                         "iso8583-adapter", "ace-stub", "ledger-service"]) {
+        check(`${svc} appears in the timeline`, timeline.includes(svc),
+              "missing, so REDIS_URL is not reaching it");
+      }
+      check("the switch reply is visible", /0210/.test(timeline), "no MTI 0210");
+      check("the PIN never reached the trace store", !/[">]1234[<"]/.test(timeline),
+            "a PIN is visible in the trace");
+    }
   }
 
   console.log(failures ? `\n${failures} UI check(s) FAILED` : "\nall UI checks passed");
