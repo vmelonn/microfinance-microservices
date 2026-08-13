@@ -343,6 +343,14 @@ jobs:
   # ---------------------------------------------------------------------
   deploy:
     name: "5. Rollout and smoke test"
+    # Declaring an environment gives the repository a Deployments tab and an
+    # Environments panel with history, and puts a "View deployment" link on
+    # every run and on the commit itself. The url is resolved after the job
+    # from the step output below, because the Route host is not known until
+    # the cluster is queried.
+    environment:
+      name: dev
+      url: ${{ steps.route.outputs.url }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -486,11 +494,13 @@ jobs:
       # through the Route and the router, instead of requiring a pod to
       # reach its own external hostname.
       - name: Publish the console URL
+        id: route
         # Into the job summary, so the link is one click from the run rather
         # than an oc command. Paste it into the repository's About > Website
         # field once and it also shows at the top of the repo page.
         run: |
           ROUTE="https://$(oc get route api-gateway -o jsonpath='{.spec.host}')"
+          echo "url=$ROUTE" >> "$GITHUB_OUTPUT"
           echo "### Operator console" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "[$ROUTE]($ROUTE)" >> "$GITHUB_STEP_SUMMARY"
