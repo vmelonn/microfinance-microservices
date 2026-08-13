@@ -3,4 +3,4 @@
 # reinstall them and undo the point of the base image.
 #
 # For local development outside Docker: pip install -e libs/mfcommon
-redis>=5.0
+redis>=8.1.0
