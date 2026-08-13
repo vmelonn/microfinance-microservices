@@ -161,6 +161,7 @@
   <h1>microfinance console</h1>
   <span class="env" id="env">checking...</span>
   <span class="who" id="who">not signed in</span>
+  <span class="env" id="build" title="the build of this page">__CONSOLE_BUILD__</span>
 </header>
 
 <nav class="tabs" role="tablist">
@@ -562,6 +563,29 @@ function requireCard(outputEl) {
     + 'card you hold, and the API does not expose card numbers to look up.</div>';
   if (outputEl) outputEl.innerHTML = message;
   return null;
+}
+
+// Is this page the one the pod would serve right now?
+//
+// A browser holding a cached page looks exactly like a deploy that has not
+// landed, and the fixes are completely different: one is a hard reload, the
+// other is waiting for a rollout. The page carries the build stamp it was
+// served with, /health reports the stamp the pod has, and a mismatch says so
+// instead of leaving you to guess why a button is missing.
+async function checkBuild() {
+  const baked = ($("build").textContent || "").trim();
+  try {
+    const res = await fetch("/health", {cache: "no-store"});
+    const live = (await res.json()).console_build;
+    if (!live || !baked || baked === live || baked.startsWith("__")) return;
+    document.body.insertAdjacentHTML("afterbegin",
+      `<div class="signin-note" id="build-warning"
+            style="margin:.6rem;border-left-color:var(--crit)">
+         <span><strong>This page is out of date.</strong> You are looking at
+         build <code>${esc(baked)}</code>; the server is serving
+         <code>${esc(live)}</code>. Reload with Ctrl+Shift+R.</span>
+       </div>`);
+  } catch { /* offline, and the rest of the page will say so soon enough */ }
 }
 
 async function api(method, path, body) {
@@ -1131,6 +1155,7 @@ $("btn-load").onclick = async () => {
 
 /* --------------------------------- startup ------------------------------- */
 (async () => {
+  checkBuild();
   const r = await fetch("/ready").then(x=>x.json()).catch(()=>null);
   $("env").textContent = r ? `gateway ${r.status}` : "gateway unreachable";
 })();

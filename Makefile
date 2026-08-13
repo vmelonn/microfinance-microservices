@@ -108,6 +108,7 @@ stop:
 # CI matrix, which is Python only.
 ui-test:
 	@node services/api-gateway/tests/console_auth.test.mjs
+	@node services/api-gateway/tests/build_stamp.test.mjs
 	@node services/api-gateway/tests/ui_flow.test.mjs
 
 scenarios:

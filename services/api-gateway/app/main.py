@@ -525,9 +525,21 @@ def balance(identifier: str, request: Request, user: dict = Depends(current_user
 # Probes
 # --------------------------------------------------------------------------
 
+def _console_build() -> str:
+    """The build stamp of the console this process would serve, or None when
+    the console is disabled. Read through a function because CONSOLE_BUILD is
+    only defined inside the ENABLE_CONSOLE block."""
+    return globals().get("CONSOLE_BUILD")
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "api-gateway"}
+    # console_build lets the PAGE check whether it is the page this pod would
+    # serve. A browser that cached the previous build otherwise looks
+    # identical to a deploy that has not landed, and the two need completely
+    # different fixes.
+    return {"status": "ok", "service": "api-gateway",
+            "console_build": _console_build()}
 
 
 @app.get("/ready")
@@ -558,7 +570,7 @@ def ready(request: Request):
 if ENABLE_CONSOLE:
     from pathlib import Path as _Path
 
-    from fastapi.responses import FileResponse
+    from fastapi.responses import HTMLResponse
 
     from app.console import router as console_router
 
@@ -570,11 +582,39 @@ if ENABLE_CONSOLE:
 
     _STATIC = _Path(__file__).parent / "static"
 
+    # Read once at startup, not per request. The page is static within a
+    # container; re-reading it on every hit would buy nothing.
+    _INDEX = _STATIC / "index.html"
+    if _INDEX.exists():
+        import hashlib
+
+        _CONSOLE_HTML = _INDEX.read_text(encoding="utf-8")
+        # Content-addressed, so it changes exactly when the page changes and
+        # is identical across replicas serving the same image. A build number
+        # or a timestamp would differ between pods of the same deployment and
+        # produce false alarms.
+        CONSOLE_BUILD = hashlib.sha256(_CONSOLE_HTML.encode()).hexdigest()[:8]
+        _CONSOLE_HTML = _CONSOLE_HTML.replace("__CONSOLE_BUILD__", CONSOLE_BUILD)
+    else:
+        _CONSOLE_HTML, CONSOLE_BUILD = None, "missing"
+
     @app.get("/", include_in_schema=False)
     def console_index():
-        index = _STATIC / "index.html"
-        if not index.exists():
+        if _CONSOLE_HTML is None:
             return {"error": "console assets missing", "looked_in": str(_STATIC)}
-        return FileResponse(index)
+        return HTMLResponse(
+            _CONSOLE_HTML,
+            headers={
+                # no-store, not merely no-cache. FileResponse previously sent
+                # an ETag and no Cache-Control at all, which lets a browser
+                # apply heuristic freshness and skip revalidation entirely;
+                # an operator could then work against the previous build for
+                # as long as the heuristic held, with nothing on screen
+                # saying so. This is one document fetched when a human opens
+                # a tab, so always fetching it costs nothing worth having.
+                "Cache-Control": "no-store, must-revalidate",
+                "X-Console-Build": CONSOLE_BUILD,
+            },
+        )
 
-    log.info("operator console enabled at /")
+    log.info(f"operator console enabled at / (build {CONSOLE_BUILD})")

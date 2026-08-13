@@ -191,6 +191,7 @@ def main():
         ("POST", "/transactions/purchase"),
         ("POST", "/transactions/topup"),
         ("POST", "/transactions/transfer"),
+        ("GET",  "/users/me"),
     ])
     check(
         "the running image serves every endpoint under test", not missing,
