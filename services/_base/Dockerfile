@@ -21,7 +21,7 @@
 # extras and then switch again, so the security posture is applied once, in
 # each service's own Dockerfile, where it is visible next to what it protects.
 
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 WORKDIR /build
 
 # Dependencies first, mfcommon second. mfcommon changes far more often than
@@ -34,7 +34,7 @@ COPY libs/mfcommon /build/libs/mfcommon
 RUN pip install --no-cache-dir --prefix=/install --no-deps /build/libs/mfcommon
 
 # ---- runtime layer: no build tools, no pip cache ----
-FROM python:3.12-slim
+FROM python:3.14-slim
 WORKDIR /app
 
 # Installed system-wide rather than into a named user's home directory. This
