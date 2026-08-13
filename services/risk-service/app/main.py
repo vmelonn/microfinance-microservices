@@ -136,6 +136,17 @@ def evaluate(body: EvaluateRequest, request: Request):
         entry_mode=body.entry_mode,
     )
 
+    # Reported by the service that MADE the decision, not only by the one
+    # that asked for it. transaction-service already traces the outcome it
+    # received; this is the rule engine's own account of why, and without it
+    # risk-service never appeared in a timeline at all.
+    trace.emit(
+        "risk", f"{decision.outcome}: " + ("; ".join(decision.reasons) or "no rule fired"),
+        {"card": mask_pan(body.card_number), "amount_cents": body.amount_cents,
+         "entry_mode": body.entry_mode},
+        level="info" if decision.outcome == "approve" else "warn",
+    )
+
     if decision.outcome != "approve":
         log.warning(
             f"risk {decision.outcome} for card={mask_pan(body.card_number)} "

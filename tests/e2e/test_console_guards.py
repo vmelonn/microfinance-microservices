@@ -205,3 +205,62 @@ def test_the_card_field_says_what_fills_it(script):
         "the card field does not say that Register is what fills it, which is "
         "the whole reason it is empty after a plain login"
     )
+
+
+# ---------------------------------------------------------------------------
+# The hidden attribute has to actually hide
+#
+# .signin-note sets display:flex. An AUTHOR rule beats the browser's built-in
+# [hidden] { display: none }, which is user-agent origin, so setting
+# el.hidden = true changed the property and left the banner on screen while
+# the header read "signed in 03423222111".
+#
+# Checked here rather than in the jsdom suite because jsdom honours the
+# hidden attribute regardless of the cascade, so a browser-shaped test cannot
+# see this bug. It is the same reason CSS frameworks all ship this rule.
+# ---------------------------------------------------------------------------
+
+def _stylesheet(html: str) -> str:
+    """The CSS, with comments removed.
+
+    Stripping comments is not fussiness: the first draft of the test below
+    matched the `[hidden] { display: none }` inside the comment EXPLAINING
+    the rule, and passed while the rule itself was absent.
+    """
+    css = re.search(r"<style>(.*?)</style>", html, re.S)
+    assert css, "the console page has no <style> block"
+    return re.sub(r"/\*.*?\*/", "", css.group(1), flags=re.S)
+
+
+def test_the_page_forces_hidden_to_win(script):
+    css = _stylesheet(CONSOLE.read_text(encoding="utf-8"))
+
+    rule = re.search(r"\[hidden\]\s*\{([^}]*)\}", css)
+    assert rule, (
+        "no [hidden] rule. Any component that sets `display` silently defeats "
+        "the hidden attribute, because author styles beat the user agent's "
+        "[hidden] { display: none }."
+    )
+    body = rule.group(1).replace(" ", "")
+    assert "display:none" in body, rule.group(0)
+    assert "!important" in body, (
+        "without !important the rule loses to a later or more specific "
+        "display declaration, which is exactly the bug it exists to prevent"
+    )
+
+
+def test_components_that_set_display_are_covered(script):
+    """
+    Every class the console hides with the attribute AND styles with a
+    display. Each one would be invisible-in-name-only without the rule above.
+    """
+    html = CONSOLE.read_text(encoding="utf-8")
+    css = _stylesheet(html)
+    for cls in ["signin-note"]:
+        block = re.search(rf"\.{cls}\s*\{{([^}}]*)\}}", css)
+        assert block, f".{cls} is not styled at all"
+        assert "display" in block.group(1), (
+            f".{cls} no longer sets display; if that is deliberate the "
+            f"[hidden] rule is still correct, but this list is now stale"
+        )
+    assert re.search(r"\[hidden\]\s*\{", css), "the [hidden] rule is gone"

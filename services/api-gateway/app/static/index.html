@@ -122,6 +122,13 @@
   :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
   /* Shown on tabs that need a session, whenever there isn't one. */
+  /* The browser's own [hidden] { display: none } is a USER AGENT rule, so
+     any author rule that sets display beats it. .signin-note sets
+     display:flex, which meant hiding the sign-in banner set the property and
+     left it on screen while the header read "signed in". Declared here, once,
+     because every component that sets display has the same latent bug. */
+  [hidden]{display:none !important}
+
   .signin-note{border-left:3px solid var(--warn);background:var(--warn-sunk);
        color:var(--ink);padding:.7rem .9rem;margin:0 0 1rem;border-radius:3px;
        display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}

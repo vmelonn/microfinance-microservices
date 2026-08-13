@@ -311,8 +311,66 @@ def schema():
             "INSERT, before deduplication.",
         ],
         "examples": [
+            # -- getting your bearings ------------------------------------
+            "SHOW TABLES",
+            "DESCRIBE fact_transactions",
             "SELECT count() FROM fact_transactions FINAL",
             "SELECT * FROM fact_transactions FINAL ORDER BY transaction_ts DESC LIMIT 20",
-            "SELECT day, sum(total_cents)/100 AS total FROM agg_daily_volume GROUP BY day ORDER BY day",
+
+            # -- where the money went -------------------------------------
+            "SELECT kind, count() AS txns, sum(amount_cents)/100 AS total "
+            "FROM fact_transactions FINAL GROUP BY kind ORDER BY total DESC",
+
+            "SELECT debit_account_id, count() AS txns, sum(amount_cents)/100 AS spent "
+            "FROM fact_transactions FINAL GROUP BY debit_account_id "
+            "ORDER BY spent DESC LIMIT 10",
+
+            # The funding account is the debit side of every top-up, so this
+            # is the float customers are holding, from the warehouse side.
+            "SELECT sum(amount_cents)/100 AS float_issued FROM fact_transactions FINAL "
+            "WHERE debit_account_id = 'acc_system_funding'",
+
+            # -- shape over time ------------------------------------------
+            "SELECT toStartOfHour(transaction_ts) AS hour, count() AS txns, "
+            "sum(amount_cents)/100 AS total FROM fact_transactions FINAL "
+            "GROUP BY hour ORDER BY hour DESC LIMIT 24",
+
+            "SELECT day, sum(total_cents)/100 AS total FROM agg_daily_volume "
+            "GROUP BY day ORDER BY day",
+
+            # -- the traps, made visible ----------------------------------
+            # ReplacingMergeTree deduplicates on a background merge, not on
+            # insert. If these two disagree, unmerged duplicates are sitting
+            # in the table and any query WITHOUT FINAL is over-counting.
+            "SELECT (SELECT count() FROM fact_transactions) AS raw_rows, "
+            "(SELECT count() FROM fact_transactions FINAL) AS deduplicated",
+
+            # The materialized view fires on INSERT, before deduplication, so
+            # agg_daily_volume can exceed the deduplicated fact table. That is
+            # a property of the design, not a bug, and this is how you see it.
+            "SELECT (SELECT sum(txn_count) FROM agg_daily_volume) AS from_the_view, "
+            "(SELECT count() FROM fact_transactions FINAL) AS from_the_facts",
+
+            # An RRN should identify one transaction. More than one row per
+            # RRN after FINAL means two different transactions collided on a
+            # reference, which the ledger now refuses but older rows may show.
+            "SELECT rrn, count() AS rows FROM fact_transactions FINAL "
+            "GROUP BY rrn HAVING rows > 1 ORDER BY rows DESC",
+
+            # -- is the pipeline actually running? ------------------------
+            # last_loaded_ts is a String on purpose: it is the exact text the
+            # source emitted, fed back unchanged, so nothing is lost to a
+            # cross-engine timestamp parse.
+            "SELECT * FROM etl_watermark FINAL",
+
+            "SELECT table_name, rows_loaded, updated_at, "
+            "dateDiff('minute', updated_at, now64(3)) AS minutes_since_last_sync "
+            "FROM etl_watermark FINAL",
+
+            # -- storage ---------------------------------------------------
+            "SELECT partition, sum(rows) AS rows, "
+            "formatReadableSize(sum(bytes_on_disk)) AS on_disk "
+            "FROM system.parts WHERE table = 'fact_transactions' AND active "
+            "GROUP BY partition ORDER BY partition",
         ],
     }

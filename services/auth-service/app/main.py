@@ -209,6 +209,8 @@ def register(body: RegisterRequest, request: Request):
             raise HTTPException(status_code=409, detail="That phone number is already registered.")
         raise
 
+    trace.emit("auth", "user created, password hashed with bcrypt",
+               {"user_id": user_id, "msisdn": mask(msisdn)})
     log.info(f"registered user_id={user_id} msisdn={mask(msisdn)}")
     return {"user_id": user_id, "full_name": body.full_name, "msisdn": msisdn}
 
@@ -227,6 +229,8 @@ def delete_user(user_id: str, request: Request):
     db: Database = request.app.state.db
     with db.transaction() as conn:
         conn.cursor().execute(db.sql("DELETE FROM users WHERE user_id = ?"), (user_id,))
+    trace.emit("auth", "compensating delete of the user row",
+               {"user_id": user_id}, level="warn")
     log.warning(f"compensating delete of user_id={user_id}")
     return {"status": "deleted", "user_id": user_id}
 
@@ -280,11 +284,18 @@ def login(body: LoginRequest, request: Request):
     # which matters more for an MSISDN than a CNIC: the number space is
     # small and guessable.
     if row is None or not verify_password(body.password, row[1]):
+        # No detail about WHICH half failed. The response is deliberately
+        # identical for an unknown number and a wrong password, and a trace
+        # that distinguishes them would hand that back to anyone who can read
+        # it.
+        trace.emit("auth", "login rejected", level="warn")
         log.warning("failed login attempt")
         raise HTTPException(status_code=401, detail="Invalid phone number or password.")
 
     user_id = row[0]
     token = create_token({"sub": user_id}, secret=JWT_SECRET, expires_in_seconds=TOKEN_LIFETIME)
+    trace.emit("auth", "password verified, JWT issued",
+               {"user_id": user_id, "expires_in_seconds": TOKEN_LIFETIME})
     log.info(f"issued token for user_id={user_id}")
     return TokenResponse(access_token=token, expires_in_seconds=TOKEN_LIFETIME, user_id=user_id)
 

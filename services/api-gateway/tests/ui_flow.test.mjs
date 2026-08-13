@@ -38,6 +38,22 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 /** Let the page's in-flight promises settle. */
 const settle = async (ms = 350) => { await sleep(ms); };
 
+/**
+ * Wait for a condition instead of guessing how long the page needs.
+ *
+ * A fixed sleep encodes today's latency into the test. Adding one fetch to
+ * doLogin, /users/me, was enough to make a 900 ms wait intermittently too
+ * short, and the failure looked like a product bug rather than a slow login.
+ */
+async function waitFor(predicate, {timeout = 5000, every = 100} = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try { if (predicate()) return true; } catch { /* not ready yet */ }
+    await sleep(every);
+  }
+  return false;
+}
+
 async function loadConsole() {
   const html = fs.readFileSync(PAGE, "utf8");
   const dom = new JSDOM(html, {
@@ -83,8 +99,10 @@ async function main() {
   check("logout is hidden while signed out", $("btn-logout").hidden === true);
   check("register is offered", $("btn-register").hidden === false);
   for (const tab of ["db", "load", "trace"]) {
-    check(`${tab} tab shows the sign-in banner`, $("auth-" + tab).hidden === false,
-          `hidden=${$("auth-" + tab).hidden}`);
+    const el = $("auth-" + tab);
+    check(`${tab} tab shows the sign-in banner`,
+          window.getComputedStyle(el).display !== "none",
+          `display=${window.getComputedStyle(el).display}`);
   }
 
   // ------------------------------------------------------------------------
@@ -122,9 +140,17 @@ async function main() {
   check("register is hidden while signed in", $("btn-register").hidden === true);
   const cardA = $("card").value;
 
+  // COMPUTED STYLE, not the hidden property.
+  //
+  // .signin-note set display:flex, and an author rule beats the browser's
+  // built-in [hidden] { display: none }. So `el.hidden = true` set the
+  // property and left the banner on screen while the header read "signed
+  // in". This test asserted the property and passed the whole time.
   for (const tab of ["db", "load", "trace"]) {
-    check(`${tab} banner cleared by the login`, $("auth-" + tab).hidden === true,
-          `hidden=${$("auth-" + tab).hidden}`);
+    const el = $("auth-" + tab);
+    const shown = window.getComputedStyle(el).display !== "none";
+    check(`${tab} banner is actually off screen once signed in`, !shown,
+          `display=${window.getComputedStyle(el).display} hidden=${el.hidden}`);
   }
 
   // The BANNER hiding is not the same as the tab looking signed in: the
@@ -136,9 +162,10 @@ async function main() {
   // and would hide the defect; the case that matters is the stale content
   // sitting there after a login, which only the refresh inside doLogin
   // clears.
+  const refreshed = await waitFor(
+    () => !/Sign in on the Wallet tab/.test(html($("trace-list"))));
   check("logging in refreshed the trace list, without revisiting the tab",
-        !/Sign in on the Wallet tab/.test(html($("trace-list"))),
-        html($("trace-list")).slice(0, 140));
+        refreshed, html($("trace-list")).slice(0, 140));
 
   // ------------------------------------------------------------------------
   section("3. the console offers to create the missing merchant");

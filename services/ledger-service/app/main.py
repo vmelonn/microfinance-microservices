@@ -124,12 +124,20 @@ class ResolveRequest(BaseModel):
 def create_account(body: CreateAccountRequest, request: Request):
     repo: LedgerRepository = request.app.state.repo
     try:
-        return repo.create_account(body.user_id, body.card_number,
-                                   body.account_type, body.msisdn)
+        account = repo.create_account(body.user_id, body.card_number,
+                                      body.account_type, body.msisdn)
     except Exception as exc:
         if repo.db.is_unique_violation(exc):
+            trace.emit("ledger", "card already registered", level="warn")
             raise HTTPException(status_code=409, detail="That card number is already registered.")
         raise
+
+    # The ledger half of the registration saga. Without this a registration
+    # showed only the gateway and auth-service, and the account that was
+    # created was invisible.
+    trace.emit("ledger", "account opened at zero, card bound",
+               {"account_id": account["account_id"], "type": body.account_type})
+    return account
 
 
 @app.post("/internal/ledger/resolve")
