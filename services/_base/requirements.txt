@@ -4,9 +4,9 @@
 #
 #   in the base    fastapi, uvicorn, pydantic  (8 of 9 services)
 #                  httpx                        (9 of 9)
+#                  redis                        (7 of 9, every service that traces)
 #
-#   left out       redis               (api-gateway, risk-service)
-#                  psycopg2-binary     (auth-service, ledger-service)
+#   left out       psycopg2-binary     (auth-service, ledger-service)
 #                  cryptography        (iso8583-adapter)
 #                  clickhouse-connect  (analytics-sync)
 #
@@ -20,4 +20,12 @@
 fastapi>=0.110
 httpx>=0.27
 pydantic>=2.6
+# Moved here from the two services that used it for idempotency and velocity,
+# because tracing made it universal. Every service writes trace events to a
+# shared Redis so the console can show one request's path across all of them,
+# and a service that has REDIS_URL but not the client fails in the quietest
+# possible way: it logs "tracing disabled, Redis unreachable: No module named
+# 'redis'" once at startup, serves traffic perfectly, and is simply absent
+# from every trace. Five services shipped like that.
+redis>=5.0
 uvicorn[standard]>=0.29
