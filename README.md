@@ -8,9 +8,10 @@ up the same path**.
 The phone number is the account. There is an operator console at the Route
 root: wallet, live per-request tracing, a ledger browser, and a load test.
 
-> **Live console:** add your Route URL here after the first deploy, and to the
-> repository's **About → Website** field so it appears at the top of the page.
-> `https://api-gateway-reemostat-dev.apps.rm2.thpm.p1.openshiftapps.com/`
+> **Live console:**
+> <https://api-gateway-reemostat-dev.apps.rm2.thpm.p1.openshiftapps.com/>
+> Sign in on the Wallet tab first; every other tab reads live data and needs
+> a token.
 
 Full reference, including 22 scenarios recorded from the services' own logs:
 [docs/architecture.html](docs/architecture.html).
