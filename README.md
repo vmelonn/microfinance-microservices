@@ -152,6 +152,62 @@ Things that bite on a constrained namespace:
 
 ---
 
+## When the console says "Application is not available"
+
+Almost always the datastores are down, not the services. On the Red Hat
+Developer Sandbox the idler scales workloads to zero after inactivity, and
+Postgres, Redis and ClickHouse get no direct traffic, so they go first.
+
+```bash
+oc get pods
+```
+
+Read it by which pods are READY, not by which are Running:
+
+| healthy `1/1` | unready `0/1` | needs |
+|---|---|---|
+| ace-stub, host-simulator, iso8583-adapter, transaction-service | | no datastore |
+| | auth-service, ledger-service | Postgres |
+| | api-gateway, risk-service | Redis |
+
+If the unready set is exactly the datastore-backed services, and there is no
+`postgres-0`, `redis-...` or `clickhouse-...` pod in the list, that is the
+answer. The services are fine; their readiness probes genuinely check the
+database rather than returning ok, so they refuse traffic until it is back.
+The Route then has no endpoint, which is the page you are looking at.
+
+Confirm and fix:
+
+```bash
+oc get deploy,statefulset          # expect redis/postgres/clickhouse at 0
+oc scale deploy/redis --replicas=1
+oc scale statefulset/postgres --replicas=1
+oc scale statefulset/clickhouse --replicas=1
+oc get pods -w
+```
+
+The four unready services recover on their own once Postgres and Redis are
+up. No redeploy, no restart: Kubernetes keeps retrying readiness.
+
+```bash
+curl -sk https://$(oc get route api-gateway -o jsonpath='{.spec.host}')/health
+oc get pvc                         # Bound means the ledger data survived
+```
+
+`/health` returning a `console_build` field also confirms the pod is running
+a build that includes the console.
+
+Other shapes, and what they mean:
+
+- **`Pending`** is quota, not idling. `oc get clusterresourcequota`.
+- **`CrashLoopBackOff`** is a real failure. `oc logs deploy/<name> --tail=50`,
+  and add `--previous` to see why the prior container died.
+- **All `1/1` but still unreachable** is the Route, not the pods.
+  `oc get endpoints api-gateway`; an empty ENDPOINTS column means the Service
+  is matching nothing.
+
+---
+
 ## Testing
 
 | Command | What it proves |
