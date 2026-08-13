@@ -3,4 +3,4 @@
 # reinstall them and undo the point of the base image.
 #
 # For local development outside Docker: pip install -e libs/mfcommon
-psycopg2-binary>=2.9
+psycopg2-binary>=2.9.12
