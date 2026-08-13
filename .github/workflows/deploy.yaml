@@ -33,9 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -90,7 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # oc installed with curl rather than redhat-actions/openshift-tools-installer.
       # That action targets a deprecated Node runtime, races on the tool cache
@@ -174,7 +174,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install oc
         run: |
@@ -251,7 +251,7 @@ jobs:
           - host-simulator    # the switch, likewise
           - analytics-sync
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # oc installed with curl rather than redhat-actions/openshift-tools-installer.
       # That action targets a deprecated Node runtime, races on the tool cache
@@ -355,9 +355,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
