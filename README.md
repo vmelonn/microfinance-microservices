@@ -152,6 +152,67 @@ Things that bite on a constrained namespace:
 
 ---
 
+## Coming back to an idled sandbox
+
+The Red Hat Developer Sandbox scales workloads to zero after inactivity, so
+after a break everything is down and the Route serves nothing. Waking it up
+is two steps, and **the order matters**.
+
+### 1. Datastores first
+
+```bash
+oc scale deploy/redis --replicas=1
+oc scale statefulset/postgres --replicas=1
+oc scale statefulset/clickhouse --replicas=1
+oc get pods -w
+```
+
+Wait for `postgres-0`, `redis-...` and `clickhouse-0` to reach `1/1`.
+
+Not arbitrary ordering. A service that starts while Redis is unreachable logs
+`tracing disabled` once and never retries, because tracing is configured in
+the lifespan and must never block a service from starting. It then serves
+traffic perfectly and is absent from every trace, which looks like a bug in
+the console rather than a startup race.
+
+### 2. Then the services
+
+```bash
+oc scale $(oc get deploy -o name | tr '
+' ' ') --replicas=1
+oc get pods -w
+```
+
+`$(oc get deploy -o name)` rather than `--all`, because some `oc` builds
+reject `--all` on these subcommands.
+
+If the services were already running when you scaled the datastores up, they
+started too early. Restart them so tracing connects:
+
+```bash
+oc rollout restart $(oc get deploy -o name | tr '
+' ' ')
+```
+
+### 3. Check it came back
+
+```bash
+curl -sk https://$(oc get route api-gateway -o jsonpath='{.spec.host}')/health
+```
+
+Expect `{"status":"ok","service":"api-gateway","console_build":"..."}`. The
+`console_build` field confirms the pod is running a build that includes the
+console.
+
+Then open the console, register, and make a transfer. A healthy trace has
+**seven services and about a dozen events**, ending at
+`gateway: responded 200`. Two services and four events means the trace store
+is not reachable from most of them, and
+[the section below](#when-the-console-says-application-is-not-available)
+covers why.
+
+---
+
 ## When the console says "Application is not available"
 
 Almost always the datastores are down, not the services. On the Red Hat
