@@ -194,7 +194,7 @@ oc rollout restart $(oc get deploy -o name | tr '
 ' ' ')
 ```
 
-### 3. Check it came back
+### 3. Check if it came back
 
 ```bash
 curl -sk https://$(oc get route api-gateway -o jsonpath='{.spec.host}')/health
