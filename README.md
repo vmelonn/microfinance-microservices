@@ -304,7 +304,9 @@ python scripts/practice_db.py --postgres "postgresql://microfinance:PW@127.0.0.1
 
 It is generated from a fixed seed, so both hold the same rows. Graded
 exercises with answers, simple SELECT through recursive CTEs and window
-functions: [docs/sql-practice.md](docs/sql-practice.md).
+functions: [docs/sql-practice.md](docs/sql-practice.md). The schema map,
+with every key and the common join paths:
+[docs/practice-schema.html](docs/practice-schema.html).
 
 The data is deliberately untidy, because queries that only work on tidy data
 are not worth much: dormant accounts, merchants with no sales, declined

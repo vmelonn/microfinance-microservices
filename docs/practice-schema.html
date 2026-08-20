@@ -1,0 +1,631 @@
+<title>Microfinance Practice Schema</title>
+<style>
+  /* Tokens carried over from docs/architecture.html so the two references
+     read as one set: petrol for the integration boundary there, for ordinary
+     foreign keys here; copper reserved for the two edges that are
+     structurally unusual. */
+  :root {
+    --ground:        #F1F4F6;
+    --surface:       #FFFFFF;
+    --surface-sunk:  #E6ECEF;
+    --rule:          #D0D9DF;
+    --rule-soft:     #E0E7EB;
+
+    --ink:           #14202A;
+    --ink-soft:      #52626F;
+    --ink-faint:     #7D8C99;
+
+    --accent:        #1F6F8B;
+    --accent-sunk:   #E0EDF2;
+    --accent-2:      #B4531A;
+    --accent-2-sunk: #F6EAE1;
+
+    --ok:            #2E7D5B;
+    --warn:          #A8761C;
+    --crit:          #B03A3A;
+    --warn-sunk:     #F7EEDC;
+    --crit-sunk:     #F7E6E6;
+
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --measure: 68ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:        #0E151B;
+      --surface:       #161F28;
+      --surface-sunk:  #1C2731;
+      --rule:          #2A3742;
+      --rule-soft:     #222E38;
+      --ink:           #E3E9EE;
+      --ink-soft:      #92A1AF;
+      --ink-faint:     #6C7C8A;
+      --accent:        #5FB3D0;
+      --accent-sunk:   #16303B;
+      --accent-2:      #E08A4C;
+      --accent-2-sunk: #33241A;
+      --ok:            #63BE96;
+      --warn:          #D2A44F;
+      --crit:          #E07A7A;
+      --warn-sunk:     #2C2417;
+      --crit-sunk:     #271A1A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:        #0E151B;
+    --surface:       #161F28;
+    --surface-sunk:  #1C2731;
+    --rule:          #2A3742;
+    --rule-soft:     #222E38;
+    --ink:           #E3E9EE;
+    --ink-soft:      #92A1AF;
+    --ink-faint:     #6C7C8A;
+    --accent:        #5FB3D0;
+    --accent-sunk:   #16303B;
+    --accent-2:      #E08A4C;
+    --accent-2-sunk: #33241A;
+    --ok:            #63BE96;
+    --warn:          #D2A44F;
+    --crit:          #E07A7A;
+    --warn-sunk:     #2C2417;
+    --crit-sunk:     #271A1A;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);
+       font-family:var(--sans);font-size:15px;line-height:1.6}
+  main{max-width:1220px;margin:0 auto;padding:clamp(1rem,3vw,2.5rem)}
+
+  header.masthead{border-bottom:2px solid var(--ink);padding-bottom:1rem;
+       margin-bottom:2rem}
+  h1{font-family:var(--mono);font-size:1.5rem;margin:0 0 .35rem;
+     letter-spacing:-.02em;text-wrap:balance}
+  .standfirst{color:var(--ink-soft);max-width:var(--measure);margin:0}
+
+  h2{font-family:var(--mono);font-size:1.05rem;margin:2.5rem 0 .9rem;
+     padding-bottom:.4rem;border-bottom:1px solid var(--rule);
+     letter-spacing:-.01em;text-wrap:balance}
+  h3{font-family:var(--mono);font-size:.92rem;margin:1.6rem 0 .5rem;
+     color:var(--accent)}
+  p{max-width:var(--measure)}
+  code{font-family:var(--mono);font-size:.88em;background:var(--surface-sunk);
+       padding:.08em .32em;border-radius:3px}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:4px;
+      padding:.85rem 1rem;overflow-x:auto;font-size:.82rem;line-height:1.55}
+  pre code{background:none;padding:0;font-size:inherit}
+  .kw{color:var(--accent)} .cm{color:var(--ink-faint);font-style:italic}
+  .st{color:var(--accent-2)}
+
+  figure{margin:0 0 1.2rem}
+  .scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);
+          border-radius:4px;padding:1rem}
+  svg{max-width:100%;height:auto;display:block;min-width:900px}
+  figcaption{font-family:var(--mono);font-size:.78rem;color:var(--ink-faint);
+             margin-top:.6rem;max-width:var(--measure)}
+
+  /* Diagram. Every colour comes from a token so both themes resolve. */
+  .tbl-box{fill:var(--surface);stroke:var(--rule);stroke-width:1.2}
+  .tbl-hub{fill:var(--accent-sunk);stroke:var(--accent);stroke-width:1.6}
+  .tbl-head{font-family:var(--mono);font-size:12px;font-weight:600;fill:var(--ink)}
+  .tbl-rows{font-family:var(--mono);font-size:10.5px;fill:var(--ink-soft)}
+  .tbl-count{font-family:var(--mono);font-size:9.5px;fill:var(--ink-faint)}
+  .key-pk{font-family:var(--mono);font-size:9px;fill:var(--accent);font-weight:600}
+  .key-fk{font-family:var(--mono);font-size:9px;fill:var(--ink-faint)}
+  .edge{stroke:var(--accent);stroke-width:1.3;fill:none}
+  .edge-odd{stroke:var(--accent-2);stroke-width:1.6;fill:none}
+  .edge-lbl{font-family:var(--mono);font-size:9px;fill:var(--ink-faint)}
+  .card-lbl{font-family:var(--mono);font-size:10px;fill:var(--accent-2);font-weight:600}
+  .sect{font-family:var(--mono);font-size:10px;fill:var(--ink-faint);
+        letter-spacing:.08em}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));
+        gap:1rem;margin:1rem 0}
+  .card{border:1px solid var(--rule);border-radius:4px;background:var(--surface);
+        overflow:hidden}
+  .card > header{background:var(--surface-sunk);padding:.5rem .8rem;
+        border-bottom:1px solid var(--rule);display:flex;align-items:baseline;
+        gap:.5rem;flex-wrap:wrap}
+  .card > header b{font-family:var(--mono);font-size:.9rem}
+  .card > header .n{font-family:var(--mono);font-size:.75rem;
+        color:var(--ink-faint);margin-left:auto;font-variant-numeric:tabular-nums}
+  .card table{width:100%;border-collapse:collapse;font-size:.8rem}
+  .card td{padding:.28rem .8rem;vertical-align:top;border-top:1px solid var(--rule-soft)}
+  .card tr:first-child td{border-top:0}
+  .card td:first-child{font-family:var(--mono);white-space:nowrap}
+  .card td:last-child{color:var(--ink-soft);font-size:.75rem}
+  .card .note{padding:.5rem .8rem;border-top:1px solid var(--rule);
+       background:var(--warn-sunk);color:var(--ink);font-size:.78rem}
+
+  .tag{font-family:var(--mono);font-size:.68rem;padding:.05rem .32rem;
+       border-radius:3px;white-space:nowrap}
+  .tag.pk{background:var(--accent-sunk);color:var(--accent)}
+  .tag.fk{background:var(--surface-sunk);color:var(--ink-soft)}
+  .tag.null{background:var(--warn-sunk);color:var(--warn)}
+
+  .note-block{border-left:3px solid var(--accent);background:var(--accent-sunk);
+       padding:.8rem 1.1rem;margin:1.2rem 0;max-width:var(--measure);
+       border-radius:0 3px 3px 0}
+  .note-block.warn{border-left-color:var(--warn);background:var(--warn-sunk)}
+  .note-block p{margin:.35rem 0}
+  .note-block b{font-weight:600}
+
+  table.plain{width:100%;border-collapse:collapse;font-size:.85rem;margin:.8rem 0}
+  table.plain th{text-align:left;font-family:var(--mono);font-size:.75rem;
+       letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);
+       border-bottom:1px solid var(--rule);padding:.4rem .6rem}
+  table.plain td{padding:.4rem .6rem;border-bottom:1px solid var(--rule-soft);
+       vertical-align:top}
+  table.plain td:first-child{font-family:var(--mono);white-space:nowrap}
+  .legend{display:flex;gap:1.4rem;flex-wrap:wrap;font-size:.8rem;
+       color:var(--ink-soft);margin:.8rem 0 0;font-family:var(--mono)}
+  .legend span{display:flex;align-items:center;gap:.4rem}
+  .swatch{width:22px;height:0;border-top:2px solid var(--accent)}
+  .swatch.odd{border-top-color:var(--accent-2);border-top-style:dashed}
+</style>
+
+<main>
+<header class="masthead">
+  <h1>Microfinance Practice Schema</h1>
+  <p class="standfirst">
+    Thirteen tables, 9,000 transactions, a year of history. The keys, how
+    they connect, and the three shapes that make joins worth practising.
+  </p>
+</header>
+
+<figure>
+  <div class="scroll">
+    <svg viewBox="0 0 1180 880" role="img"
+         aria-label="Entity relationship diagram of the practice database: users, accounts and cards on the left, transactions and ledger entries at the centre, merchants and disputes on the right, with branches forming a self-referencing hierarchy and dispute_tags forming a many-to-many join.">
+      <defs>
+        <marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="3"
+                orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="var(--accent)"/></marker>
+        <marker id="b" markerWidth="9" markerHeight="9" refX="8" refY="3"
+                orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="var(--accent-2)"/></marker>
+      </defs>
+
+      <text class="sect" x="24" y="26">ORGANISATION</text>
+      <text class="sect" x="262" y="26">IDENTITY</text>
+      <text class="sect" x="512" y="316">MONEY</text>
+      <text class="sect" x="800" y="26">COMMERCE</text>
+      <text class="sect" x="800" y="406">DISPUTES</text>
+
+      <!-- branches, with the self-reference -->
+      <rect class="tbl-box" x="24" y="40" width="196" height="74" rx="3"/>
+      <text class="tbl-head" x="36" y="58">branches</text>
+      <text class="tbl-count" x="196" y="58" text-anchor="end">15</text>
+      <text class="tbl-rows" x="36" y="76">branch_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="36" y="92">parent_branch_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="36" y="106">region, city</text>
+      <path class="edge-odd" d="M24 84 C4 84 4 52 24 52" marker-end="url(#b)"/>
+      <text class="card-lbl" x="10" y="132">self</text>
+
+      <!-- kyc_tiers -->
+      <rect class="tbl-box" x="24" y="168" width="196" height="58" rx="3"/>
+      <text class="tbl-head" x="36" y="186">kyc_tiers</text>
+      <text class="tbl-count" x="196" y="186" text-anchor="end">3</text>
+      <text class="tbl-rows" x="36" y="204">tier_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="36" y="219">daily_limit_cents</text>
+
+      <!-- agents -->
+      <rect class="tbl-box" x="24" y="280" width="196" height="72" rx="3"/>
+      <text class="tbl-head" x="36" y="298">agents</text>
+      <text class="tbl-count" x="196" y="298" text-anchor="end">26</text>
+      <text class="tbl-rows" x="36" y="316">agent_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="36" y="332">branch_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="36" y="346">active</text>
+
+      <!-- users -->
+      <rect class="tbl-box" x="262" y="40" width="200" height="88" rx="3"/>
+      <text class="tbl-head" x="274" y="58">users</text>
+      <text class="tbl-count" x="438" y="58" text-anchor="end">400</text>
+      <text class="tbl-rows" x="274" y="76">user_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="274" y="92">tier_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="274" y="108">branch_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="274" y="122">msisdn</text>
+
+      <!-- accounts -->
+      <rect class="tbl-hub" x="262" y="180" width="200" height="88" rx="3"/>
+      <text class="tbl-head" x="274" y="198">accounts</text>
+      <text class="tbl-count" x="438" y="198" text-anchor="end">425</text>
+      <text class="tbl-rows" x="274" y="216">account_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="274" y="232">user_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="274" y="248">type</text>
+      <text class="tbl-count" x="274" y="262">wallet 400, merchant 24, system 1</text>
+
+      <!-- cards -->
+      <rect class="tbl-box" x="262" y="320" width="200" height="72" rx="3"/>
+      <text class="tbl-head" x="274" y="338">cards</text>
+      <text class="tbl-count" x="438" y="338" text-anchor="end">400</text>
+      <text class="tbl-rows" x="274" y="356">card_number <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="274" y="372">account_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="274" y="386">status</text>
+
+      <!-- transactions, the hub -->
+      <rect class="tbl-hub" x="512" y="330" width="218" height="104" rx="3"/>
+      <text class="tbl-head" x="524" y="348">transactions</text>
+      <text class="tbl-count" x="706" y="348" text-anchor="end">9,000</text>
+      <text class="tbl-rows" x="524" y="366">rrn <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="524" y="382">agent_id <tspan class="key-fk">FK, null</tspan></text>
+      <text class="tbl-rows" x="524" y="398">merchant_id <tspan class="key-fk">FK, null</tspan></text>
+      <text class="tbl-rows" x="524" y="414">kind, status, amount_cents</text>
+      <text class="tbl-count" x="524" y="428">approved 7,133 / declined 1,711 / reversed 156</text>
+
+      <!-- ledger_entries -->
+      <rect class="tbl-hub" x="512" y="530" width="218" height="88" rx="3"/>
+      <text class="tbl-head" x="524" y="548">ledger_entries</text>
+      <text class="tbl-count" x="706" y="548" text-anchor="end">14,266</text>
+      <text class="tbl-rows" x="524" y="566">entry_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="524" y="582">rrn <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="524" y="598">account_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="524" y="612">entry_type, amount_cents</text>
+
+      <!-- merchant_categories -->
+      <rect class="tbl-box" x="800" y="40" width="200" height="58" rx="3"/>
+      <text class="tbl-head" x="812" y="58">merchant_categories</text>
+      <text class="tbl-count" x="976" y="58" text-anchor="end">8</text>
+      <text class="tbl-rows" x="812" y="76">category_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="812" y="91">mcc, name</text>
+
+      <!-- merchants -->
+      <rect class="tbl-box" x="800" y="150" width="200" height="88" rx="3"/>
+      <text class="tbl-head" x="812" y="168">merchants</text>
+      <text class="tbl-count" x="976" y="168" text-anchor="end">24</text>
+      <text class="tbl-rows" x="812" y="186">merchant_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="812" y="202">category_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="812" y="218">account_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="812" y="232">city</text>
+
+      <!-- disputes -->
+      <rect class="tbl-box" x="800" y="420" width="200" height="88" rx="3"/>
+      <text class="tbl-head" x="812" y="438">disputes</text>
+      <text class="tbl-count" x="976" y="438" text-anchor="end">120</text>
+      <text class="tbl-rows" x="812" y="456">dispute_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="812" y="472">rrn <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="812" y="488">raised_by_user_id <tspan class="key-fk">FK</tspan></text>
+      <text class="tbl-rows" x="812" y="502">resolved_at <tspan class="key-fk">29 null</tspan></text>
+
+      <!-- dispute_tags -->
+      <rect class="tbl-box" x="800" y="580" width="200" height="72" rx="3"
+            stroke="var(--accent-2)" stroke-width="1.6"/>
+      <text class="tbl-head" x="812" y="598">dispute_tags</text>
+      <text class="tbl-count" x="976" y="598" text-anchor="end">241</text>
+      <text class="tbl-rows" x="812" y="616">dispute_id <tspan class="key-pk">PK FK</tspan></text>
+      <text class="tbl-rows" x="812" y="632">tag_id <tspan class="key-pk">PK FK</tspan></text>
+      <text class="card-lbl" x="812" y="647">join table</text>
+
+      <!-- tags -->
+      <rect class="tbl-box" x="800" y="700" width="200" height="58" rx="3"/>
+      <text class="tbl-head" x="812" y="718">tags</text>
+      <text class="tbl-count" x="976" y="718" text-anchor="end">6</text>
+      <text class="tbl-rows" x="812" y="736">tag_id <tspan class="key-pk">PK</tspan></text>
+      <text class="tbl-rows" x="812" y="751">name</text>
+
+      <!-- ===================== edges ===================== -->
+
+      <!-- users.branch_id -> branches -->
+      <path class="edge" d="M262 100 L240 100 L240 88 L220 88" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="228" y="82" text-anchor="end">branch_id</text>
+
+      <!-- users.tier_id -> kyc_tiers -->
+      <path class="edge" d="M262 92 L244 92 L244 196 L220 196" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="250" y="150">tier_id</text>
+
+      <!-- agents.branch_id -> branches -->
+      <path class="edge" d="M122 280 L122 114" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="128" y="250">branch_id</text>
+
+      <!-- accounts.user_id -> users -->
+      <path class="edge" d="M362 180 L362 128" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="368" y="158">user_id · 1 to N</text>
+
+      <!-- cards.account_id -> accounts -->
+      <path class="edge" d="M362 320 L362 268" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="368" y="298">account_id</text>
+
+      <!-- merchants.category_id -> merchant_categories -->
+      <path class="edge" d="M900 150 L900 98" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="906" y="126">category_id</text>
+
+      <!-- merchants.account_id -> accounts -->
+      <path class="edge" d="M800 218 L740 218 L740 224 L462 224" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="600" y="216" text-anchor="middle">account_id, one per merchant</text>
+
+      <!-- transactions.merchant_id -> merchants -->
+      <path class="edge" d="M730 366 L766 366 L766 238 L860 238" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="772" y="300">merchant_id</text>
+      <text class="edge-lbl" x="772" y="312">purchases only</text>
+
+      <!-- transactions.agent_id -> agents -->
+      <path class="edge" d="M512 382 L470 382 L470 340 L220 340" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="360" y="334" text-anchor="middle">agent_id, top-ups only</text>
+
+      <!-- ledger_entries.rrn -> transactions -->
+      <path class="edge" d="M621 530 L621 434" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="628" y="470">rrn</text>
+      <text class="edge-lbl" x="628" y="484">exactly 2 per</text>
+      <text class="edge-lbl" x="628" y="498">approved txn</text>
+
+      <!-- ledger_entries.account_id -> accounts -->
+      <path class="edge" d="M512 574 L400 574 L400 392" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="406" y="500">account_id</text>
+
+      <!-- disputes.rrn -> transactions -->
+      <path class="edge" d="M800 464 L760 464 L760 410 L730 410" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="756" y="440" text-anchor="end">rrn</text>
+
+      <!-- disputes.raised_by_user_id -> users -->
+      <path class="edge" d="M900 420 L900 300 L1040 300 L1040 84 L462 84" marker-end="url(#a)"/>
+      <text class="edge-lbl" x="1046" y="200">raised_by_user_id</text>
+
+      <!-- dispute_tags -> disputes / tags -->
+      <path class="edge-odd" d="M900 580 L900 508" marker-end="url(#b)"/>
+      <text class="edge-lbl" x="906" y="550">dispute_id</text>
+      <path class="edge-odd" d="M900 652 L900 700" marker-end="url(#b)"/>
+      <text class="edge-lbl" x="906" y="680">tag_id</text>
+    </svg>
+  </div>
+  <figcaption>
+    Boxes show the primary key and every foreign key, not every column. Filled
+    boxes are the three tables you will join through most. Row counts are the
+    real ones in <code>practice.db</code>.
+  </figcaption>
+</figure>
+
+<div class="legend">
+  <span><i class="swatch"></i> foreign key</span>
+  <span><i class="swatch odd"></i> the two unusual shapes: self-reference and many-to-many</span>
+  <span><b class="tag pk">PK</b> primary key</span>
+  <span><b class="tag fk">FK</b> foreign key</span>
+</div>
+
+<h2>How to read it</h2>
+
+<p>
+  An arrow points from the table holding the foreign key <em>to</em> the table
+  holding the primary key it references. So <code>accounts.user_id → users</code>
+  means each account names one user, and one user can have many accounts. The
+  arrow always points at the "one" side.
+</p>
+
+<div class="note-block">
+  <p><b>Three tables carry the load.</b> <code>accounts</code> is the hub every
+  identity path arrives at, <code>transactions</code> is where every event is
+  recorded, and <code>ledger_entries</code> is the only place money actually
+  lives. Most queries you write will pass through at least two of them.</p>
+</div>
+
+<h2>The three shapes worth understanding</h2>
+
+<h3>1. The self-reference: branches</h3>
+<p>
+  <code>parent_branch_id</code> points back at <code>branches</code>. One row
+  has NULL there, and that row is head office. Below it sit four regional hubs,
+  and below those ten local branches: three levels, discovered rather than
+  hard-coded, which is what a recursive CTE is for.
+</p>
+<pre><code><span class="cm">-- walk the tree, depth and all</span>
+<span class="kw">WITH RECURSIVE</span> tree <span class="kw">AS</span> (
+    <span class="kw">SELECT</span> branch_id, name, <span class="kw">0</span> <span class="kw">AS</span> depth
+    <span class="kw">FROM</span> branches <span class="kw">WHERE</span> parent_branch_id <span class="kw">IS NULL</span>
+    <span class="kw">UNION ALL</span>
+    <span class="kw">SELECT</span> b.branch_id, b.name, tree.depth + <span class="kw">1</span>
+    <span class="kw">FROM</span> branches b <span class="kw">JOIN</span> tree <span class="kw">ON</span> b.parent_branch_id = tree.branch_id
+)
+<span class="kw">SELECT</span> depth, name <span class="kw">FROM</span> tree <span class="kw">ORDER BY</span> depth, name;</code></pre>
+
+<h3>2. The many-to-many: dispute_tags</h3>
+<p>
+  A dispute carries several tags; a tag applies to many disputes. Neither table
+  can hold the other's key, so a third table holds both. Its primary key is the
+  pair, which is what stops the same tag being attached twice. Reaching tags
+  from disputes always costs two joins.
+</p>
+
+<h3>3. The mutually exclusive keys: transactions</h3>
+<p>
+  <code>agent_id</code> is set on all 2,719 top-ups and nothing else.
+  <code>merchant_id</code> is set on all 4,972 purchases and nothing else.
+  Transfers have neither. This is not untidiness: a cash-in and a card purchase
+  genuinely have different counterparties.
+</p>
+
+<div class="note-block warn">
+  <p><b>The trap.</b> An inner join on <code>agent_id</code> silently discards
+  every purchase and every transfer, because NULL matches nothing. You get a
+  confident answer about a third of the table.</p>
+</div>
+
+<h2>Every table</h2>
+
+<div class="grid">
+
+  <div class="card">
+    <header><b>transactions</b><span class="n">9,000</span></header>
+    <table>
+      <tr><td>rrn <b class="tag pk">PK</b></td><td>reference number</td></tr>
+      <tr><td>amount_cents</td><td>integer cents, 250000 = 2,500.00</td></tr>
+      <tr><td>kind</td><td>purchase 4,972 · topup 2,719 · transfer 1,309</td></tr>
+      <tr><td>status</td><td>approved 7,133 · declined 1,711 · reversed 156</td></tr>
+      <tr><td>channel</td><td>app · ussd · agent · web</td></tr>
+      <tr><td>agent_id <b class="tag fk">FK</b> <b class="tag null">6,281 null</b></td><td>top-ups only</td></tr>
+      <tr><td>merchant_id <b class="tag fk">FK</b> <b class="tag null">4,028 null</b></td><td>purchases only</td></tr>
+      <tr><td>created_at</td><td>2025-08-01 to 2026-07-31</td></tr>
+    </table>
+    <div class="note">One row per <em>attempt</em>. A declined row is somebody
+      who tried and failed, so it moved no money.</div>
+  </div>
+
+  <div class="card">
+    <header><b>ledger_entries</b><span class="n">14,266</span></header>
+    <table>
+      <tr><td>entry_id <b class="tag pk">PK</b></td><td>generated</td></tr>
+      <tr><td>rrn <b class="tag fk">FK</b></td><td>to transactions</td></tr>
+      <tr><td>account_id <b class="tag fk">FK</b></td><td>to accounts</td></tr>
+      <tr><td>entry_type</td><td>debit 7,133 · credit 7,133, always equal</td></tr>
+      <tr><td>amount_cents</td><td></td></tr>
+    </table>
+    <div class="note">Exactly 2 rows per approved transaction, never 1 or 3.
+      There is no balance column: a balance is credits minus debits.</div>
+  </div>
+
+  <div class="card">
+    <header><b>accounts</b><span class="n">425</span></header>
+    <table>
+      <tr><td>account_id <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>user_id <b class="tag fk">FK</b> <b class="tag null">25 null</b></td><td>merchant and system accounts have no owner</td></tr>
+      <tr><td>msisdn</td><td>phone number, the wallet identifier</td></tr>
+      <tr><td>type</td><td>wallet 400 · merchant 24 · system 1</td></tr>
+      <tr><td>opened_at</td><td></td></tr>
+    </table>
+    <div class="note">The single system row is <code>acc_system_funding</code>,
+      where top-up money comes from. Its balance is negative by design.</div>
+  </div>
+
+  <div class="card">
+    <header><b>users</b><span class="n">400</span></header>
+    <table>
+      <tr><td>user_id <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>full_name</td><td></td></tr>
+      <tr><td>msisdn</td><td>unique</td></tr>
+      <tr><td>tier_id <b class="tag fk">FK</b></td><td>to kyc_tiers</td></tr>
+      <tr><td>branch_id <b class="tag fk">FK</b></td><td>home branch</td></tr>
+      <tr><td>created_at</td><td>signup, useful for cohorts</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <header><b>branches</b><span class="n">15</span></header>
+    <table>
+      <tr><td>branch_id <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>parent_branch_id <b class="tag fk">FK</b> <b class="tag null">1 null</b></td><td>to branches, the hierarchy</td></tr>
+      <tr><td>city, region</td><td>Punjab 5 · Sindh 4 · KPK 3 · Balochistan 2 · Federal 1</td></tr>
+      <tr><td>opened_at</td><td></td></tr>
+    </table>
+    <div class="note">The one NULL parent is head office. That row is the anchor
+      of any recursive query.</div>
+  </div>
+
+  <div class="card">
+    <header><b>agents</b><span class="n">26</span></header>
+    <table>
+      <tr><td>agent_id <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>full_name</td><td></td></tr>
+      <tr><td>branch_id <b class="tag fk">FK</b></td><td></td></tr>
+      <tr><td>joined_at</td><td></td></tr>
+      <tr><td>active</td><td>22 active, 4 not</td></tr>
+    </table>
+    <div class="note">People at shop counters who take cash and credit a wallet.
+      Four have never processed a top-up.</div>
+  </div>
+
+  <div class="card">
+    <header><b>merchants</b><span class="n">24</span></header>
+    <table>
+      <tr><td>merchant_id <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>category_id <b class="tag fk">FK</b></td><td>to merchant_categories</td></tr>
+      <tr><td>account_id <b class="tag fk">FK</b></td><td>where their money lands</td></tr>
+      <tr><td>name, city</td><td></td></tr>
+    </table>
+    <div class="note">Two have never traded. An inner join hides them; that is
+      the point of them being there.</div>
+  </div>
+
+  <div class="card">
+    <header><b>merchant_categories</b><span class="n">8</span></header>
+    <table>
+      <tr><td>category_id <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>mcc</td><td>ISO 18245 code: 5411 grocery, 5541 fuel</td></tr>
+      <tr><td>name</td><td></td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <header><b>cards</b><span class="n">400</span></header>
+    <table>
+      <tr><td>card_number <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>account_id <b class="tag fk">FK</b></td><td>one card per wallet</td></tr>
+      <tr><td>status</td><td>active 368 · blocked 32</td></tr>
+      <tr><td>issued_at</td><td></td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <header><b>disputes</b><span class="n">120</span></header>
+    <table>
+      <tr><td>dispute_id <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>rrn <b class="tag fk">FK</b></td><td>the disputed transaction</td></tr>
+      <tr><td>raised_by_user_id <b class="tag fk">FK</b></td><td></td></tr>
+      <tr><td>reason, status</td><td>resolved 74 · open 29 · rejected 17</td></tr>
+      <tr><td>resolved_at <b class="tag null">29 null</b></td><td>NULL while open</td></tr>
+    </table>
+    <div class="note">The NULLs line up exactly with the 29 open rows. Use
+      <code>IS NULL</code>, never <code>= NULL</code>.</div>
+  </div>
+
+  <div class="card">
+    <header><b>dispute_tags</b><span class="n">241</span></header>
+    <table>
+      <tr><td>dispute_id <b class="tag pk">PK</b> <b class="tag fk">FK</b></td><td rowspan="2">the pair is the key, so a tag cannot be attached twice</td></tr>
+      <tr><td>tag_id <b class="tag pk">PK</b> <b class="tag fk">FK</b></td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <header><b>tags</b><span class="n">6</span></header>
+    <table>
+      <tr><td>tag_id <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>name</td><td>fraud-suspected, duplicate-charge, chargeback…</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <header><b>kyc_tiers</b><span class="n">3</span></header>
+    <table>
+      <tr><td>tier_id <b class="tag pk">PK</b></td><td></td></tr>
+      <tr><td>name</td><td>Basic · Verified · Business</td></tr>
+      <tr><td>daily_limit_cents</td><td></td></tr>
+      <tr><td>monthly_limit_cents</td><td></td></tr>
+    </table>
+  </div>
+
+</div>
+
+<h2>Join recipes</h2>
+<p>The paths you will retype most. Copy them rather than rederiving each time.</p>
+
+<table class="plain">
+  <thead><tr><th>from → to</th><th>join</th></tr></thead>
+  <tbody>
+    <tr><td>transaction → who paid</td>
+        <td><code>JOIN ledger_entries e ON e.rrn = t.rrn AND e.entry_type = 'debit'</code></td></tr>
+    <tr><td>entry → the person</td>
+        <td><code>JOIN accounts a ON a.account_id = e.account_id JOIN users u ON u.user_id = a.user_id</code></td></tr>
+    <tr><td>purchase → category</td>
+        <td><code>JOIN merchants m ON m.merchant_id = t.merchant_id JOIN merchant_categories c ON c.category_id = m.category_id</code></td></tr>
+    <tr><td>top-up → branch</td>
+        <td><code>JOIN agents ag ON ag.agent_id = t.agent_id JOIN branches b ON b.branch_id = ag.branch_id</code></td></tr>
+    <tr><td>dispute → tags</td>
+        <td><code>JOIN dispute_tags dt ON dt.dispute_id = d.dispute_id JOIN tags g ON g.tag_id = dt.tag_id</code></td></tr>
+    <tr><td>account → balance</td>
+        <td><code>sum(CASE WHEN entry_type = 'credit' THEN amount_cents ELSE -amount_cents END)</code></td></tr>
+  </tbody>
+</table>
+
+<h2>Five rules to keep beside you</h2>
+
+<table class="plain">
+  <tbody>
+    <tr><td>1</td><td>Filter <code>status = 'approved'</code> on <code>transactions</code> unless you specifically want the failures. 1,867 rows moved no money.</td></tr>
+    <tr><td>2</td><td>Money is integer cents. Divide by <code>100.0</code>, not <code>100</code>, or integer division truncates.</td></tr>
+    <tr><td>3</td><td><code>IS NULL</code>, never <code>= NULL</code>. Comparing to NULL is unknown, and unknown rows are dropped.</td></tr>
+    <tr><td>4</td><td>On a <code>LEFT JOIN</code>, extra conditions go in <code>ON</code>. Put them in <code>WHERE</code> and it silently becomes an inner join.</td></tr>
+    <tr><td>5</td><td>Zeros exist on purpose: 32 dormant wallets, 2 merchants with no sales, 4 agents with no top-ups. If a total comes back short, that is why.</td></tr>
+  </tbody>
+</table>
+
+<p style="color:var(--ink-soft);font-size:.85rem;margin-top:2rem">
+  DBeaver can draw its own version of this: press <b>F4</b> on the database in
+  the navigator and open the <b>ER Diagram</b> tab. It reads the real foreign
+  keys, so it is a good check that you have understood the shape.
+</p>
+</main>

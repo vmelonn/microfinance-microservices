@@ -28,6 +28,10 @@ is correct on the other.
 
 ## The schema
 
+A visual map with every key and the join recipes is in
+[practice-schema.html](practice-schema.html). Open it beside DBeaver.
+
+
 ```
 branches ──┐ (parent_branch_id -> branches, a hierarchy)
            ├── agents
