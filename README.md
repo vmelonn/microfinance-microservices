@@ -285,6 +285,34 @@ are recordings rather than drawings.
 
 ---
 
+## Learning SQL on this data
+
+A practice database on the same domain, separate from the live ledger:
+thirteen tables, a year of history, about 9,000 transactions.
+
+```bash
+make practice-db     # writes practice.db
+```
+
+Open it in **DBeaver** (*New Connection → SQLite →* pick the file). No server,
+no cluster. Or load the identical data into the cluster Postgres:
+
+```bash
+oc port-forward svc/postgres 5432:5432
+python scripts/practice_db.py --postgres "postgresql://microfinance:PW@127.0.0.1:5432/practice"
+```
+
+It is generated from a fixed seed, so both hold the same rows. Graded
+exercises with answers, simple SELECT through recursive CTEs and window
+functions: [docs/sql-practice.md](docs/sql-practice.md).
+
+The data is deliberately untidy, because queries that only work on tidy data
+are not worth much: dormant accounts, merchants with no sales, declined
+transactions that have no ledger entries, and disputes with a NULL
+`resolved_at`.
+
+---
+
 ## Layout
 
 ```

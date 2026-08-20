@@ -24,7 +24,7 @@ TESTED := ace-stub ledger-service
 
 .DEFAULT_GOAL := help
 .PHONY: help install test test-shared test-services lint up down logs smoke \
-        run stop verify scenarios scenarios-json ui-test build build-base deploy-dev deploy-prod clean wsdl \
+        run stop verify practice-db scenarios scenarios-json ui-test build build-base deploy-dev deploy-prod clean wsdl \
         oc-init oc-build oc-status oc-smoke
 
 help:
@@ -42,6 +42,7 @@ help:
 	@echo "  run           same, but leave it running on :18080"
 	@echo "  stop          free the service ports after a run was killed"
 	@echo "  scenarios     drive 22 situations and record what each layer did"
+	@echo "  practice-db   build practice.db for learning SQL (see docs/sql-practice.md)"
 	@echo "  ui-test       drive the console in a real DOM (needs node + a running stack)"
 	@echo "  up            docker compose up --build (needs a container engine)"
 	@echo "  down          stop and remove containers"
@@ -110,6 +111,11 @@ ui-test:
 	@node services/api-gateway/tests/console_auth.test.mjs
 	@node services/api-gateway/tests/build_stamp.test.mjs
 	@node services/api-gateway/tests/ui_flow.test.mjs
+
+# A practice database for learning SQL, on this platform's domain.
+# Thirteen tables, a year of history. Open practice.db in DBeaver.
+practice-db:
+	@$(PY) scripts/practice_db.py
 
 scenarios:
 	@$(PY) scripts/scenarios.py

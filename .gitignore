@@ -32,3 +32,7 @@ hsm-base-key*
 # jsdom, for the console UI test. Installed on demand, not vendored.
 node_modules/
 package-lock.json
+
+# The SQL practice database. Reproducible from a fixed seed, so it is
+# generated rather than committed: python scripts/practice_db.py
+practice.db
